@@ -1,0 +1,135 @@
+import os
+import logging
+import random
+import json
+import requests
+from datetime import datetime
+from pathlib import Path
+from pydub import AudioSegment, effects
+import moviepy.editor as mp
+from PIL import Image, ImageDraw, ImageFont
+
+# YouTube API
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+# Logging
+logging.basicConfig(filename='automation.log', level=logging.INFO,
+                    format='%(asctime)s %(levelname)s:%(message)s')
+
+# CONFIG
+CONFIG_FILE = "config.json"
+DEFAULT_TAGS = ["fail", "glitch", "404Circus", "compilation", "tech fails", "viral"]
+
+# Load config
+def load_config():
+    if Path(CONFIG_FILE).exists():
+        with open(CONFIG_FILE, 'r') as f:
+            return json.load(f)
+    return {
+        "sources": [
+            {"url": "https://v.redd.it/sampleclip1", "text": "Epic Computer Fail!"},
+            {"url": "https://v.redd.it/sampleclip2", "text": "Glitch in the Matrix!"}
+        ],
+        "upload_schedule": "daily"
+    }
+
+# Download video
+def download_video(url, output_path):
+    try:
+        r = requests.get(url, stream=True)
+        with open(output_path, 'wb') as f:
+            for chunk in r.iter_content(1024):
+                f.write(chunk)
+        logging.info(f"Downloaded: {url}")
+        return True
+    except Exception as e:
+        logging.error(f"Download failed {url}: {e}")
+        return False
+
+# Process clip with meme overlay
+def process_clip(input_path, output_path, meme_text):
+    try:
+        clip = mp.VideoFileClip(input_path).subclip(0, min(8, clip.duration))
+        txt_clip = mp.TextClip(meme_text, fontsize=50, color='white', bg_color='black',
+                               method='caption', size=(clip.w, 100))
+        txt_clip = txt_clip.set_duration(clip.duration).set_pos(('center', 'top'))
+        final = mp.CompositeVideoClip([clip, txt_clip])
+        final.write_videofile(output_path, codec='libx264', audio_codec='aac', threads=4)
+        logging.info(f"Processed: {output_path}")
+    except Exception as e:
+        logging.error(f"Processing failed {input_path}: {e}")
+
+# Normalize audio
+def normalize_audio(audio_path, output_path):
+    try:
+        sound = AudioSegment.from_file(audio_path)
+        normalized = effects.normalize(sound)
+        normalized.export(output_path, format="wav")
+        logging.info(f"Audio normalized: {output_path}")
+    except Exception as e:
+        logging.error(f"Audio normalization failed: {e}")
+
+# Generate thumbnail
+def generate_thumbnail(text, output_path):
+    img = Image.new('RGB', (1280, 720), color=(0, 0, 0))
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.truetype("arial.ttf", 60)
+    draw.text((50, 300), text, font=font, fill=(255, 255, 255))
+    img.save(output_path)
+    logging.info(f"Thumbnail created: {output_path}")
+
+# Upload to YouTube
+def upload_to_youtube(video_path, title, description, thumbnail_path=None, creds_path='token.json'):
+    try:
+        creds = Credentials.from_authorized_user_file(creds_path, ['https://www.googleapis.com/auth/youtube.upload'])
+        youtube = build('youtube', 'v3', credentials=creds)
+        request_body = {
+            'snippet': {
+                'title': title,
+                'description': description,
+                'tags': DEFAULT_TAGS,
+                'categoryId': '28'
+            },
+            'status': {
+                'privacyStatus': 'public',
+                'selfDeclaredMadeForKids': False
+            }
+        }
+        media = MediaFileUpload(video_path)
+        request = youtube.videos().insert(part="snippet,status", body=request_body, media_body=media)
+        response = request.execute()
+        video_id = response['id']
+        logging.info(f"Uploaded: {video_id}")
+
+        if thumbnail_path:
+            youtube.thumbnails().set(videoId=video_id, media_body=MediaFileUpload(thumbnail_path)).execute()
+            logging.info(f"Thumbnail uploaded for {video_id}")
+
+        return video_id
+    except Exception as e:
+        logging.error(f"Upload failed {video_path}: {e}")
+
+# Main automation
+def main():
+    cfg = load_config()
+    os.makedirs('downloads', exist_ok=True)
+    os.makedirs('edited', exist_ok=True)
+    os.makedirs('thumbnails', exist_ok=True)
+
+    for i, src in enumerate(cfg['sources']):
+        raw_path = f"downloads/clip_{i}.mp4"
+        edited_path = f"edited/clip_{i}_edited.mp4"
+        thumb_path = f"thumbnails/thumb_{i}.jpg"
+
+        if download_video(src['url'], raw_path):
+            process_clip(raw_path, edited_path, src['text'])
+            generate_thumbnail(src['text'], thumb_path)
+
+            title = f"404 Circus: {src['text']} #{random.randint(100,999)}"
+            description = f"{src['text']}\n\nBrought to you by 404 Circus — Viral tech chaos compilations."
+            upload_to_youtube(edited_path, title, description, thumb_path)
+
+if __name__ == "__main__":
+    main()
