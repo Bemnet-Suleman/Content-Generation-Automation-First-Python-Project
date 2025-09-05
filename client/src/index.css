@@ -1,0 +1,144 @@
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: hsl(240, 5%, 4%);
+  --foreground: hsl(0, 0%, 98%);
+  --card: hsl(240, 4%, 8%);
+  --card-foreground: hsl(0, 0%, 95%);
+  --popover: hsl(240, 4%, 10%);
+  --popover-foreground: hsl(0, 0%, 95%);
+  --primary: hsl(140, 100%, 50%);
+  --primary-foreground: hsl(240, 5%, 4%);
+  --secondary: hsl(240, 4%, 12%);
+  --secondary-foreground: hsl(0, 0%, 85%);
+  --muted: hsl(240, 4%, 15%);
+  --muted-foreground: hsl(0, 0%, 63%);
+  --accent: hsl(180, 100%, 50%);
+  --accent-foreground: hsl(240, 5%, 4%);
+  --destructive: hsl(0, 100%, 50%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --border: hsl(240, 4%, 16%);
+  --input: hsl(240, 4%, 16%);
+  --ring: hsl(140, 100%, 50%);
+  --matrix: hsl(140, 100%, 50%);
+  --error: hsl(0, 100%, 50%);
+  --warning: hsl(39, 100%, 50%);
+  --success: hsl(140, 100%, 50%);
+  --radius: 8px;
+}
+
+.dark {
+  --background: hsl(240, 5%, 4%);
+  --foreground: hsl(0, 0%, 98%);
+  --card: hsl(240, 4%, 8%);
+  --card-foreground: hsl(0, 0%, 95%);
+  --popover: hsl(240, 4%, 10%);
+  --popover-foreground: hsl(0, 0%, 95%);
+  --primary: hsl(140, 100%, 50%);
+  --primary-foreground: hsl(240, 5%, 4%);
+  --secondary: hsl(240, 4%, 12%);
+  --secondary-foreground: hsl(0, 0%, 85%);
+  --muted: hsl(240, 4%, 15%);
+  --muted-foreground: hsl(0, 0%, 63%);
+  --accent: hsl(180, 100%, 50%);
+  --accent-foreground: hsl(240, 5%, 4%);
+  --destructive: hsl(0, 100%, 50%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --border: hsl(240, 4%, 16%);
+  --input: hsl(240, 4%, 16%);
+  --ring: hsl(140, 100%, 50%);
+  --matrix: hsl(140, 100%, 50%);
+  --error: hsl(0, 100%, 50%);
+  --warning: hsl(39, 100%, 50%);
+  --success: hsl(140, 100%, 50%);
+}
+
+@keyframes glitch {
+  0%, 100% { transform: translate(0); }
+  20% { transform: translate(-2px, 2px); }
+  40% { transform: translate(-2px, -2px); }
+  60% { transform: translate(2px, 2px); }
+  80% { transform: translate(2px, -2px); }
+}
+
+@keyframes pulse-neon {
+  from { box-shadow: 0 0 5px var(--matrix), 0 0 10px var(--matrix), 0 0 15px var(--matrix); }
+  to { box-shadow: 0 0 10px var(--matrix), 0 0 20px var(--matrix), 0 0 30px var(--matrix); }
+}
+
+@keyframes matrix-rain {
+  0% { transform: translateY(-100%); }
+  100% { transform: translateY(100vh); }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: "Inter", sans-serif;
+  }
+
+  .font-mono {
+    font-family: "JetBrains Mono", monospace;
+  }
+}
+
+@layer components {
+  .glitch-text {
+    @apply relative;
+    color: var(--matrix);
+  }
+
+  .glitch-text::before,
+  .glitch-text::after {
+    content: attr(data-text);
+    @apply absolute top-0 left-0 w-full h-full;
+  }
+
+  .glitch-text::before {
+    color: var(--error);
+    z-index: -1;
+    animation: glitch 1s infinite;
+    clip: rect(0, 900px, 0, 0);
+  }
+
+  .glitch-text::after {
+    color: var(--accent);
+    z-index: -2;
+    animation: glitch 1s infinite reverse;
+    clip: rect(0, 900px, 0, 0);
+  }
+
+  .neon-border {
+    border: 1px solid var(--matrix);
+    box-shadow: 0 0 5px var(--matrix), inset 0 0 5px var(--matrix);
+  }
+
+  .neon-glow {
+    box-shadow: 0 0 10px var(--matrix);
+  }
+
+  .matrix-bg {
+    background: linear-gradient(45deg, transparent 30%, var(--matrix) 30%, var(--matrix) 32%, transparent 32%);
+    background-size: 4px 4px;
+    opacity: 0.1;
+  }
+
+  .animate-glitch {
+    animation: glitch 2s infinite;
+  }
+
+  .animate-pulse-neon {
+    animation: pulse-neon 2s ease-in-out infinite alternate;
+  }
+
+  .animate-matrix-rain {
+    animation: matrix-rain 20s linear infinite;
+  }
+}
