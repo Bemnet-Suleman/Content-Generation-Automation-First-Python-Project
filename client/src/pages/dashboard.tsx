@@ -308,7 +308,7 @@ export default function Dashboard() {
             </CardHeader>
             <CardContent className="p-6">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                {systemStatus?.map((status) => (
+                {(systemStatus || []).map((status: any) => (
                   <div key={status.service} className="text-center" data-testid={`system-status-${status.service}`}>
                     <div className="w-16 h-16 mx-auto mb-3 rounded-full flex items-center justify-center">
                       {getSystemStatusIcon(status.status)}

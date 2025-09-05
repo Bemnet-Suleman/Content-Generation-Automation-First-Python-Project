@@ -83,6 +83,8 @@ export const systemStatus = pgTable("system_status", {
     queueSize?: number;
     lastScan?: string;
     error?: string;
+    lastProcess?: string;
+    initialized?: string;
   }>(),
 });
 

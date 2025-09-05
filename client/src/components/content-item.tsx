@@ -31,7 +31,7 @@ export default function ContentItem({ content, onAddToQueue, onViewSource }: Con
     }
   };
 
-  const potential = getPotentialBadge(content.trendingScore);
+  const potential = getPotentialBadge(content.trendingScore || 0);
   const sourceBadge = getSourceBadge(content.source);
 
   return (

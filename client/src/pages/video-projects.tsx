@@ -93,7 +93,7 @@ export default function VideoProjects() {
 
     updateProject.mutate({
       id,
-      updates: { scheduledUploadTime: tomorrow.toISOString() }
+      updates: { scheduledUploadTime: tomorrow }
     }, {
       onSuccess: () => {
         toast({

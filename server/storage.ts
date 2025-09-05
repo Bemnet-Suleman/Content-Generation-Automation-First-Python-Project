@@ -78,11 +78,13 @@ export class DatabaseStorage implements IStorage {
 
   // Projects
   async getProjects(userId?: string): Promise<Project[]> {
-    let query = db.select().from(projects);
     if (userId) {
-      query = query.where(eq(projects.userId, userId));
+      return await db.select().from(projects)
+        .where(eq(projects.userId, userId))
+        .orderBy(desc(projects.createdAt));
     }
-    return await query.orderBy(desc(projects.createdAt));
+    return await db.select().from(projects)
+      .orderBy(desc(projects.createdAt));
   }
 
   async getProject(id: string): Promise<Project | undefined> {
@@ -93,15 +95,16 @@ export class DatabaseStorage implements IStorage {
   async createProject(project: InsertProject): Promise<Project> {
     const [newProject] = await db
       .insert(projects)
-      .values(project)
+      .values([project])
       .returning();
     return newProject;
   }
 
   async updateProject(id: string, project: Partial<InsertProject>): Promise<Project | undefined> {
+    const updateData: any = { ...project, updatedAt: new Date() };
     const [updatedProject] = await db
       .update(projects)
-      .set({ ...project, updatedAt: new Date() })
+      .set(updateData)
       .where(eq(projects.id, id))
       .returning();
     return updatedProject || undefined;
@@ -109,7 +112,7 @@ export class DatabaseStorage implements IStorage {
 
   async deleteProject(id: string): Promise<boolean> {
     const result = await db.delete(projects).where(eq(projects.id, id));
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   // Content Sources
@@ -124,15 +127,16 @@ export class DatabaseStorage implements IStorage {
   async createContentSource(source: InsertContentSource): Promise<ContentSource> {
     const [newSource] = await db
       .insert(contentSources)
-      .values(source)
+      .values([source])
       .returning();
     return newSource;
   }
 
   async updateContentSource(id: string, source: Partial<InsertContentSource>): Promise<ContentSource | undefined> {
+    const updateData: any = source;
     const [updatedSource] = await db
       .update(contentSources)
-      .set(source)
+      .set(updateData)
       .where(eq(contentSources.id, id))
       .returning();
     return updatedSource || undefined;
@@ -165,16 +169,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getChannelAnalytics(startDate?: Date, endDate?: Date): Promise<Analytics[]> {
-    let query = db.select().from(analytics);
-    
     if (startDate && endDate) {
-      query = query.where(and(
-        gte(analytics.date, startDate),
-        lte(analytics.date, endDate)
-      ));
+      return await db.select().from(analytics)
+        .where(and(
+          gte(analytics.date, startDate),
+          lte(analytics.date, endDate)
+        ))
+        .orderBy(desc(analytics.date));
     }
     
-    return await query.orderBy(desc(analytics.date));
+    return await db.select().from(analytics)
+      .orderBy(desc(analytics.date));
   }
 
   // Upload Queue
@@ -204,7 +209,7 @@ export class DatabaseStorage implements IStorage {
 
   async removeFromUploadQueue(id: string): Promise<boolean> {
     const result = await db.delete(uploadQueue).where(eq(uploadQueue.id, id));
-    return result.rowCount > 0;
+    return (result.rowCount ?? 0) > 0;
   }
 
   // System Status
@@ -213,12 +218,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async updateSystemStatus(service: string, statusData: InsertSystemStatus): Promise<SystemStatus> {
+    const insertData: any = { ...statusData, service };
+    const updateData: any = { ...statusData, lastUpdate: new Date() };
     const [updatedStatus] = await db
       .insert(systemStatus)
-      .values({ ...statusData, service })
+      .values([insertData])
       .onConflictDoUpdate({
         target: systemStatus.service,
-        set: { ...statusData, lastUpdate: new Date() }
+        set: updateData
       })
       .returning();
     return updatedStatus;

@@ -82,14 +82,14 @@ export default function ContentResearch() {
     
     if (selectedFilter === "all") return matchesSearch;
     if (selectedFilter === "unprocessed") return matchesSearch && !content.isProcessed;
-    if (selectedFilter === "high-potential") return matchesSearch && content.trendingScore >= 70;
+    if (selectedFilter === "high-potential") return matchesSearch && (content.trendingScore || 0) >= 70;
     return matchesSearch;
   });
 
   const filters = [
     { id: "all", label: "All Content", count: contentSources?.length || 0 },
     { id: "unprocessed", label: "Unprocessed", count: contentSources?.filter(c => !c.isProcessed).length || 0 },
-    { id: "high-potential", label: "High Potential", count: contentSources?.filter(c => c.trendingScore >= 70).length || 0 },
+    { id: "high-potential", label: "High Potential", count: contentSources?.filter(c => (c.trendingScore || 0) >= 70).length || 0 },
   ];
 
   return (

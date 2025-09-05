@@ -64,7 +64,7 @@ export function processPythonScript(scriptName: string, params: PythonScriptPara
           }
         }
         
-        reject(new Error(`Script failed: ${stderr}`));
+        reject(new Error(`Script failed: ${String(stderr)}`));
       }
     });
 
