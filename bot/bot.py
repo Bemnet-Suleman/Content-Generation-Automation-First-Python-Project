@@ -33,17 +33,17 @@ logger = logging.getLogger(__name__)
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     theme = style_profile["visual_theme"].upper().replace("_", " ")
     welcome = (
-        f"🎬 *Content Creation Bot* — Active\n\n"
-        f"Style Theme: `{theme}`\n"
-        f"Font: `{style_profile['font']}`\n"
-        f"Caption Color: `{style_profile['caption_color']}`\n"
-        f"Music Genre: `{style_profile['music_genre']}`\n\n"
-        f"*Available Commands:*\n"
+        f"🎬 <b>Content Creation Bot</b> — Active\n\n"
+        f"Style Theme: <code>{theme}</code>\n"
+        f"Font: <code>{style_profile['font']}</code>\n"
+        f"Caption Color: <code>{style_profile['caption_color']}</code>\n"
+        f"Music Genre: <code>{style_profile['music_genre']}</code>\n\n"
+        f"<b>Available Commands:</b>\n"
         f"/script — Generate a viral script for the default niche\n"
-        f"/script \\[niche\\] — Generate a script for your custom niche\n"
-        f"  _Example: /script crypto investing_"
+        f"/script [niche] — Generate a script for your custom niche\n"
+        f"  <i>Example: /script crypto investing</i>"
     )
-    await update.message.reply_text(welcome, parse_mode="Markdown")
+    await update.message.reply_text(welcome, parse_mode="HTML")
 
 
 async def cmd_script(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -52,26 +52,26 @@ async def cmd_script(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     display_niche = niche or os.getenv("CONTENT_NICHE", "personal finance tips")
     await update.message.reply_text(
-        f"⏳ Fetching live trends for *{display_niche}*...\n"
-        f"_This may take 10–20 seconds._",
-        parse_mode="Markdown",
+        f"⏳ Fetching live trends for <b>{display_niche}</b>...\n"
+        f"<i>This may take 10–20 seconds.</i>",
+        parse_mode="HTML",
     )
 
     try:
         result = run_trend_research(niche)
         message = result["telegram_message"]
-        await update.message.reply_text(message, parse_mode="Markdown")
+        await update.message.reply_text(message, parse_mode="HTML")
     except EnvironmentError as e:
         await update.message.reply_text(
-            f"⚠️ *Configuration Error*\n`{e}`\n\n"
-            f"Add your `GROQ_API_KEY` as a Replit secret.",
-            parse_mode="Markdown",
+            f"⚠️ <b>Configuration Error</b>\n<code>{e}</code>\n\n"
+            f"Add your <code>GROQ_API_KEY</code> as a Replit secret.",
+            parse_mode="HTML",
         )
     except Exception as e:
         logger.exception("Module 1 error")
         await update.message.reply_text(
-            f"❌ *Error in Module 1*\n`{str(e)}`",
-            parse_mode="Markdown",
+            f"❌ <b>Error in Module 1</b>\n<code>{str(e)}</code>",
+            parse_mode="HTML",
         )
 
 

@@ -24,6 +24,7 @@ Entry points (called by the Telegram bot handler):
 """
 
 import os
+import re
 import json
 import textwrap
 from datetime import datetime
@@ -484,6 +485,25 @@ def generate_script(prompt: str, target_seconds: int = 60) -> dict:
     return script
 
 
+def _esc_html(text: str) -> str:
+    """
+    Escape HTML special characters in LLM-generated text, then render
+    pacing cues as styled inline badges instead of raw marker strings.
+
+    Flow:
+      1. Escape & → &amp;, < → &lt;, > → &gt;  (safe for Telegram HTML)
+      2. After escaping, <<PAUSE>> becomes &lt;&lt;PAUSE&gt;&gt; and
+         <<STRESS>> becomes &lt;&lt;STRESS&gt;&gt;
+      3. Replace those escaped forms with styled HTML badges.
+    """
+    text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    text = text.replace("&lt;&lt;PAUSE&gt;&gt;", " <code>⏸</code> ")
+    text = text.replace("&lt;&lt;STRESS&gt;&gt;", "<b><u>")
+    # <<STRESS>> wraps the next word — close the tag after the next word boundary
+    text = re.sub(r"<b><u>(\S+)", r"<b><u>\1</u></b>", text)
+    return text
+
+
 def format_telegram_message(
     niche: str,
     script: dict,
@@ -491,8 +511,10 @@ def format_telegram_message(
     trends_source: str = "📡 Live Google Trends",
 ) -> str:
     """
-    Build the Telegram message using the style_profile visual identity.
-    Renders the 4-part narrative structure with clear section labels.
+    Build the Telegram message in HTML parse mode.
+    All LLM-generated content passes through _esc_html() so that
+    special characters never break the parser, and pacing cues are
+    rendered as inline badges rather than raw marker strings.
     """
     sep = "─" * 36
     label_color = style_profile["caption_color"]
@@ -501,61 +523,59 @@ def format_telegram_message(
 
     top_trends = (
         "\n".join(
-            [
-                f"  {i + 1}. {t['query']} ({t['value']})"
-                for i, t in enumerate(trending[:5])
-            ]
+            [f"  {i + 1}. {t['query']} ({t['value']})"
+             for i, t in enumerate(trending[:5])]
         )
         or "  (unavailable)"
     )
 
-    hook_text = script.get("hook", "").strip()
-    stakes_text = script.get("stakes", "").strip()
-    cta_text = script.get("cta", "").strip()
-    thumbnail = script.get("thumbnail_text", "")
-    word_count = script.get("actual_word_count", "—")
-    length_ok = script.get("length_ok", True)
+    hook_text   = _esc_html(script.get("hook", "").strip())
+    stakes_text = _esc_html(script.get("stakes", "").strip())
+    cta_text    = _esc_html(script.get("cta", "").strip())
+    thumbnail   = _esc_html(script.get("thumbnail_text", ""))
+    word_count  = script.get("actual_word_count", "—")
+    length_ok   = script.get("length_ok", True)
     length_badge = "✅ on target" if length_ok else "⚠️ short"
 
     meat = script.get("meat", {})
     if isinstance(meat, dict):
-        tip1 = meat.get("tip1", "").strip()
-        tip2 = meat.get("tip2", "").strip()
-        tip3 = meat.get("tip3", "").strip()
+        tip1 = _esc_html(meat.get("tip1", "").strip())
+        tip2 = _esc_html(meat.get("tip2", "").strip())
+        tip3 = _esc_html(meat.get("tip3", "").strip())
     else:
         tip1 = tip2 = tip3 = ""
 
     keywords = script.get("keywords", [])
     mood_tags = script.get("mood_tags", [])
-    keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-    mood_str = ", ".join(mood_tags) if isinstance(mood_tags, list) else str(mood_tags)
+    keywords_str = _esc_html(", ".join(keywords) if isinstance(keywords, list) else str(keywords))
+    mood_str     = _esc_html(", ".join(mood_tags) if isinstance(mood_tags, list) else str(mood_tags))
 
     message = (
-        f"🎬 *MODULE 1 — TREND RESEARCH & SCRIPT*\n"
-        f"`{sep}`\n"
-        f"*Theme:* {theme}\n"
-        f"*Niche:* {niche}\n"
-        f"*Generated:* {timestamp}\n\n"
-        f"📊 *TOP TRENDING QUERIES* — _{trends_source}_\n{top_trends}\n\n"
-        f"`{sep}`\n"
-        f"📝 *SCRIPT — 4\\-PART NARRATIVE*\n"
-        f"_{word_count} spoken words — {length_badge}_\n\n"
-        f"⚡ *PART 1 — PATTERN INTERRUPT* _(0–8 sec)_\n"
+        f"🎬 <b>MODULE 1 — TREND RESEARCH &amp; SCRIPT</b>\n"
+        f"<code>{sep}</code>\n"
+        f"<b>Theme:</b> {theme}\n"
+        f"<b>Niche:</b> {niche}\n"
+        f"<b>Generated:</b> {timestamp}\n\n"
+        f"📊 <b>TOP TRENDING QUERIES</b> — <i>{trends_source}</i>\n{top_trends}\n\n"
+        f"<code>{sep}</code>\n"
+        f"📝 <b>SCRIPT — 4-PART NARRATIVE</b>\n"
+        f"<i>{word_count} spoken words — {length_badge}</i>\n\n"
+        f"⚡ <b>PART 1 — PATTERN INTERRUPT</b> <i>(0–8 sec)</i>\n"
         f"{hook_text}\n\n"
-        f"🔥 *PART 2 — THE STAKES* _(8–25 sec)_\n"
+        f"🔥 <b>PART 2 — THE STAKES</b> <i>(8–20 sec)</i>\n"
         f"{stakes_text}\n\n"
-        f"🧠 *PART 3 — THE MEAT* _(25–75 sec)_\n"
-        f"*Tip 1:* {tip1}\n\n"
-        f"*Tip 2:* {tip2}\n\n"
-        f"*Tip 3:* {tip3}\n\n"
-        f"🎯 *PART 4 — RETENTION CTA* _(75–90 sec)_\n"
+        f"🧠 <b>PART 3 — THE MEAT</b> <i>(20–52 sec)</i>\n"
+        f"<b>Tip 1:</b> {tip1}\n\n"
+        f"<b>Tip 2:</b> {tip2}\n\n"
+        f"<b>Tip 3:</b> {tip3}\n\n"
+        f"🎯 <b>PART 4 — RETENTION CTA</b> <i>(52–60 sec)</i>\n"
         f"{cta_text}\n\n"
-        f"`{sep}`\n"
-        f"🔑 *ASSET KEYWORDS:* {keywords_str}\n"
-        f"🎵 *MOOD TAGS:* {mood_str}\n"
-        f"🖼 *THUMBNAIL TEXT:* `{thumbnail}`\n\n"
-        f"_Style: {label_color} captions · {style_profile['font']} · {style_profile['music_genre']}_\n"
-        f"_Model: Llama 3.3 70B via Groq_"
+        f"<code>{sep}</code>\n"
+        f"🔑 <b>ASSET KEYWORDS:</b> {keywords_str}\n"
+        f"🎵 <b>MOOD TAGS:</b> {mood_str}\n"
+        f"🖼 <b>THUMBNAIL TEXT:</b> <code>{thumbnail}</code>\n\n"
+        f"<i>Style: {label_color} captions · {style_profile['font']} · {style_profile['music_genre']}</i>\n"
+        f"<i>Model: Llama 3.3 70B via Groq</i>"
     )
 
     return message
