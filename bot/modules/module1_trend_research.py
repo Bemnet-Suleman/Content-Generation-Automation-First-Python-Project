@@ -4,6 +4,12 @@ Module 1: Trend Research & Scripting
 Uses pytrends to fetch real trending data, then feeds raw trend signals
 into Groq (Llama 3.3 70B) to generate a viral-style video script.
 
+4-Part Narrative Structure (min 180 spoken words):
+  1. Pattern Interrupt  — Hook that stops the scroll
+  2. The Stakes         — Why this matters right now
+  3. The Meat           — 3 distinct, fact-backed tips or insights
+  4. Retention CTA      — Keeps them subscribed and coming back
+
 Every output reflects the centralized style_profile — tone, hook style,
 CTA style, and formatting all come from that single dictionary so that
 every module reads from the same cloth.
@@ -117,14 +123,16 @@ def build_script_prompt(
     ) or "  (No live headlines retrieved)"
 
     prompt = textwrap.dedent(f"""
-        You are a viral short-form video scriptwriter for {niche}.
+        You are an elite viral short-form video scriptwriter for {niche}.
 
         STYLE PROFILE (follow precisely):
         - Visual Theme : {visual_theme}
         - Music Genre  : {music_genre}
         - Script Tone  : {tone}
-        - Hook Style   : {hook_style}  (create an open loop that compels the viewer to keep watching)
+        - Hook Style   : {hook_style}
         - CTA Style    : {cta_style}
+        - Caption Font : {style_profile["font"]} at {style_profile["caption_font_size"]}px
+          (write short, punchy sentences that fit cleanly on screen)
 
         LIVE TREND DATA (analyze this before writing — do NOT guess):
         Top trending search queries for "{niche}" right now:
@@ -134,37 +142,58 @@ def build_script_prompt(
         {news_block}
 
         TASK:
-        Using the trend data above as your foundation, write a tight 60-second
-        vertical video script (YouTube Shorts / TikTok) targeting viewers
-        interested in {niche}.
+        Using the trend data above as your foundation, write a 90-second
+        vertical video script (YouTube Shorts / TikTok) for viewers interested
+        in {niche}.
 
-        The script MUST have exactly these three sections:
+        The script MUST follow this exact 4-part narrative structure.
+        The TOTAL spoken word count across all four parts MUST be at least 180 words.
 
-        [HOOK] (0-5 sec)
-        - Open loop hook in the {hook_style} style.
+        ── PART 1: PATTERN INTERRUPT (0–8 sec) ──
+        Hook style: {hook_style}
+        - Shatter the viewer's autopilot with one line they did NOT expect.
         - Reference the #1 trending query if it fits naturally.
-        - Must make the viewer say "wait, what?" and keep watching.
+        - End on a cliffhanger that makes skipping feel like a mistake.
+        - Target: 20–30 words.
 
-        [BODY] (5-50 sec)
-        - Deliver 3-5 punchy, fact-backed insights derived from the trend data.
-        - Each insight should feel revelatory, not generic.
-        - Write in short, staccato sentences — optimized for captions
-          rendered in {style_profile["font"]} at {style_profile["caption_font_size"]}px.
-        - Do NOT pad. Every word earns its screen time.
+        ── PART 2: THE STAKES (8–25 sec) ──
+        - Immediately answer: "Why does this matter RIGHT NOW?"
+        - Use a specific stat, date, or real-world consequence drawn from the trend data.
+        - Build urgency without sounding clickbait.
+        - Target: 35–45 words.
 
-        [CTA] (50-60 sec)
-        - One sharp call-to-action in the {cta_style} style.
-        - Feel urgent. Feel personal.
+        ── PART 3: THE MEAT (25–75 sec) ──
+        - Deliver exactly 3 distinct, numbered tips or facts — each grounded in the trend data.
+        - Each tip must feel like something the viewer could act on today.
+        - Separate each tip clearly (Tip 1 / Tip 2 / Tip 3).
+        - Write in short, staccato sentences optimized for caption display.
+        - Do NOT pad. Do NOT repeat. Every word earns its screen time.
+        - Target: 90–110 words across all 3 tips.
 
-        After the script, provide:
-        KEYWORDS: comma-separated list of 8-10 keywords for asset sourcing
-        MOOD_TAGS: comma-separated mood words for music & B-roll selection
-        SUGGESTED_THUMBNAIL_TEXT: one punchy phrase (max 6 words) in CAPS
+        ── PART 4: RETENTION CTA (75–90 sec) ──
+        CTA style: {cta_style}
+        - Do NOT just say "like and subscribe." Give them a specific reason to come back.
+        - Tease what they'll miss if they don't follow.
+        - Feel urgent. Feel personal. Feel like a promise.
+        - Target: 25–35 words.
 
-        Format your response as valid JSON with keys:
-        "hook", "body", "cta", "keywords", "mood_tags", "thumbnail_text"
+        After the script, provide supporting metadata.
 
-        Return ONLY the JSON object — no markdown fences, no extra text.
+        Return ONLY a valid JSON object with these exact keys — no markdown, no extra text:
+        {{
+          "hook": "...",
+          "stakes": "...",
+          "meat": {{
+            "tip1": "...",
+            "tip2": "...",
+            "tip3": "..."
+          }},
+          "cta": "...",
+          "word_count": <integer — total spoken words across all 4 parts>,
+          "keywords": ["...", "..."],
+          "mood_tags": ["...", "..."],
+          "thumbnail_text": "..."
+        }}
     """).strip()
 
     return prompt
@@ -173,7 +202,9 @@ def build_script_prompt(
 def generate_script(prompt: str) -> dict:
     """
     Send the data-grounded prompt to Groq (Llama 3.3 70B) and parse the JSON response.
-    Returns a dict with keys: hook, body, cta, keywords, mood_tags, thumbnail_text
+    Returns a dict with keys:
+        hook, stakes, meat (tip1/tip2/tip3), cta,
+        word_count, keywords, mood_tags, thumbnail_text
     """
     client = _init_groq()
 
@@ -183,7 +214,7 @@ def generate_script(prompt: str) -> dict:
             {
                 "role": "system",
                 "content": (
-                    "You are an expert viral short-form video scriptwriter. "
+                    "You are an elite viral short-form video scriptwriter. "
                     "Always respond with valid JSON only — no markdown fences, "
                     "no preamble, no explanation. Just the raw JSON object."
                 ),
@@ -191,7 +222,7 @@ def generate_script(prompt: str) -> dict:
             {"role": "user", "content": prompt},
         ],
         temperature=0.8,
-        max_tokens=1024,
+        max_tokens=2048,
     )
 
     raw = chat_completion.choices[0].message.content.strip()
@@ -205,8 +236,10 @@ def generate_script(prompt: str) -> dict:
     except json.JSONDecodeError:
         return {
             "hook": raw,
-            "body": "",
+            "stakes": "",
+            "meat": {"tip1": "", "tip2": "", "tip3": ""},
             "cta": "",
+            "word_count": 0,
             "keywords": [],
             "mood_tags": [],
             "thumbnail_text": "",
@@ -217,8 +250,7 @@ def generate_script(prompt: str) -> dict:
 def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> str:
     """
     Build the Telegram message using the style_profile visual identity.
-    Uses the profile's caption color, label conventions, and tone to
-    present the script to the user.
+    Renders the 4-part narrative structure with clear section labels.
     """
     sep = "─" * 36
     label_color = style_profile["caption_color"]
@@ -230,22 +262,24 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
          for i, t in enumerate(trending[:5])]
     ) or "  (unavailable)"
 
-    body_text = script.get("body", "").strip()
-    cta_text = script.get("cta", "").strip()
-    hook_text = script.get("hook", "").strip()
+    hook_text   = script.get("hook", "").strip()
+    stakes_text = script.get("stakes", "").strip()
+    cta_text    = script.get("cta", "").strip()
+    thumbnail   = script.get("thumbnail_text", "")
+    word_count  = script.get("word_count", "—")
+
+    meat = script.get("meat", {})
+    if isinstance(meat, dict):
+        tip1 = meat.get("tip1", "").strip()
+        tip2 = meat.get("tip2", "").strip()
+        tip3 = meat.get("tip3", "").strip()
+    else:
+        tip1 = tip2 = tip3 = ""
+
     keywords = script.get("keywords", [])
     mood_tags = script.get("mood_tags", [])
-    thumbnail = script.get("thumbnail_text", "")
-
-    if isinstance(keywords, list):
-        keywords_str = ", ".join(keywords)
-    else:
-        keywords_str = str(keywords)
-
-    if isinstance(mood_tags, list):
-        mood_str = ", ".join(mood_tags)
-    else:
-        mood_str = str(mood_tags)
+    keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
+    mood_str     = ", ".join(mood_tags) if isinstance(mood_tags, list) else str(mood_tags)
 
     message = (
         f"🎬 *MODULE 1 — TREND RESEARCH & SCRIPT*\n"
@@ -255,10 +289,18 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
         f"*Generated:* {timestamp}\n\n"
         f"📊 *TOP TRENDING QUERIES*\n{top_trends}\n\n"
         f"`{sep}`\n"
-        f"📝 *GENERATED SCRIPT*\n\n"
-        f"🔴 *\\[HOOK\\]* _(0–5 sec)_\n{hook_text}\n\n"
-        f"▶ *\\[BODY\\]* _(5–50 sec)_\n{body_text}\n\n"
-        f"🎯 *\\[CTA\\]* _(50–60 sec)_\n{cta_text}\n\n"
+        f"📝 *SCRIPT — 4\\-PART NARRATIVE*\n"
+        f"_~{word_count} spoken words_\n\n"
+        f"⚡ *PART 1 — PATTERN INTERRUPT* _(0–8 sec)_\n"
+        f"{hook_text}\n\n"
+        f"🔥 *PART 2 — THE STAKES* _(8–25 sec)_\n"
+        f"{stakes_text}\n\n"
+        f"🧠 *PART 3 — THE MEAT* _(25–75 sec)_\n"
+        f"*Tip 1:* {tip1}\n\n"
+        f"*Tip 2:* {tip2}\n\n"
+        f"*Tip 3:* {tip3}\n\n"
+        f"🎯 *PART 4 — RETENTION CTA* _(75–90 sec)_\n"
+        f"{cta_text}\n\n"
         f"`{sep}`\n"
         f"🔑 *ASSET KEYWORDS:* {keywords_str}\n"
         f"🎵 *MOOD TAGS:* {mood_str}\n"
