@@ -10,5 +10,6 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "python-telegram-bot>=22.7",
     "pytrends>=4.9.2",
+    "pytrends-modern>=0.2.5",
     "requests>=2.33.1",
 ]

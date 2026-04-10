@@ -1,8 +1,8 @@
 """
 Module 1: Trend Research & Scripting
 -------------------------------------
-Uses pytrends to fetch real trending data, then feeds raw trend signals
-into Groq (Llama 3.3 70B) to generate a viral-style video script.
+Trend source  : pytrends-modern (stable) → LLM Topic Brainstormer fallback
+Script engine : Groq / Llama 3.3 70B
 
 4-Part Narrative Structure (60-second target, min 150 spoken words):
   1. Pattern Interrupt  — Hook that stops the scroll           (15–20 words)
@@ -10,11 +10,12 @@ into Groq (Llama 3.3 70B) to generate a viral-style video script.
   3. The Meat           — 3 sub-points × 2-3 sentences each   (80–95 words)
   4. Retention CTA      — Keeps them subscribed                (20–25 words)
 
-Pacing cues ([Pause 1s], [Emphasis]) are embedded in the script text
-to guide the voiceover engine and fill time naturally.
+Pacing cues embedded in script text (visually distinct from spoken words):
+  <<PAUSE>>  — 1-second beat for the voiceover engine
+  <<STRESS>> — stress the next word/phrase
 
-Validation: if the generated script is under 140 words, the LLM is
-asked to rewrite it with more depth before returning to the user.
+Validation: if spoken word count < 135, the LLM is asked to expand
+before the result is returned to the user.
 
 Every output reflects the centralized style_profile.
 
@@ -29,7 +30,6 @@ from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
-from pytrends.request import TrendReq
 from groq import Groq
 
 from bot.config import style_profile
@@ -44,20 +44,20 @@ TRENDS_TIMEFRAME = os.getenv("TRENDS_TIMEFRAME", "now 7-d")
 
 def _init_groq() -> Groq:
     if not GROQ_API_KEY:
-        raise EnvironmentError(
-            "GROQ_API_KEY is not set. Add it as a Replit secret."
-        )
+        raise EnvironmentError("GROQ_API_KEY is not set. Add it as a Replit secret.")
     return Groq(api_key=GROQ_API_KEY)
 
 
-def fetch_pytrends(niche: str) -> list[dict]:
+def _fetch_pytrends_modern(niche: str) -> list[dict]:
     """
-    Pull the top trending related queries for the niche from Google Trends.
-    Returns a list of {"query": str, "value": int} dicts sorted by value desc.
+    Pull trending related queries via pytrends-modern (more stable Google Trends API).
+    Returns list of {"query": str, "value": int, "source": "google_trends"}.
+    Raises on any failure so the caller can fall back gracefully.
     """
+    from pytrends_modern.request import TrendReq  # lazy import — only used here
+
     pytrends = TrendReq(hl="en-US", tz=360)
-    kw_list = [niche]
-    pytrends.build_payload(kw_list, timeframe=TRENDS_TIMEFRAME, geo=TRENDS_GEO)
+    pytrends.build_payload([niche], timeframe=TRENDS_TIMEFRAME, geo=TRENDS_GEO)
 
     related = pytrends.related_queries()
     trending_items = []
@@ -66,12 +66,97 @@ def fetch_pytrends(niche: str) -> list[dict]:
         if data and data.get("top") is not None:
             df = data["top"]
             for _, row in df.iterrows():
-                trending_items.append(
-                    {"query": str(row["query"]), "value": int(row["value"])}
-                )
+                trending_items.append({
+                    "query": str(row["query"]),
+                    "value": int(row["value"]),
+                    "source": "google_trends",
+                })
+
+    if not trending_items:
+        raise ValueError("pytrends-modern returned no results")
 
     trending_items.sort(key=lambda x: x["value"], reverse=True)
     return trending_items[:15]
+
+
+def _brainstorm_trends_llm(niche: str, client: Groq) -> list[dict]:
+    """
+    LLM fallback: generate plausible trending sub-topics for the niche
+    using the style_profile as context. Called only when Google Trends fails.
+
+    Returns list of {"query": str, "value": int, "source": "llm_brainstormed"}.
+    Values are synthetic interest scores (100 → lowest) for ranking purposes.
+    """
+    tone = style_profile["script_tone"]
+    visual_theme = style_profile["visual_theme"]
+
+    brainstorm_prompt = textwrap.dedent(f"""
+        You are a content strategist specializing in viral {niche} content.
+
+        Style context:
+        - Visual theme : {visual_theme}
+        - Script tone  : {tone}
+
+        Task: Generate 10 specific, realistic sub-topics that are currently
+        trending or highly searched within the "{niche}" niche.
+
+        Rules:
+        - Each sub-topic must be a realistic search query (2-6 words).
+        - Order them from highest to lowest estimated search interest.
+        - Do NOT use generic phrases like "tips" or "how to" alone.
+        - Base them on realistic audience curiosity in the niche.
+
+        Return ONLY a valid JSON array of objects, no extra text:
+        [
+          {{"query": "...", "value": 100}},
+          {{"query": "...", "value": 90}},
+          ...
+        ]
+    """).strip()
+
+    completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": "Respond with valid JSON only."},
+            {"role": "user", "content": brainstorm_prompt},
+        ],
+        temperature=0.7,
+        max_tokens=512,
+    )
+    raw = completion.choices[0].message.content.strip()
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+
+    items = json.loads(raw)
+    for item in items:
+        item["source"] = "llm_brainstormed"
+    return items[:15]
+
+
+def fetch_trends(niche: str, groq_client: Groq) -> tuple[list[dict], str]:
+    """
+    Two-layer trend fetcher:
+      Layer 1 — pytrends-modern (live Google Trends data)
+      Layer 2 — LLM Topic Brainstormer (style-profile-aware fallback)
+
+    Returns:
+        (trending_items, source_label)
+        source_label is "📡 Live Google Trends" or "🧠 AI Brainstormed Topics"
+    """
+    try:
+        items = _fetch_pytrends_modern(niche)
+        print(f"[Module 1] Trends source: pytrends-modern ({len(items)} queries)")
+        return items, "📡 Live Google Trends"
+    except Exception as e:
+        print(f"[Module 1] pytrends-modern failed ({e}). Falling back to LLM brainstormer.")
+        try:
+            items = _brainstorm_trends_llm(niche, groq_client)
+            print(f"[Module 1] LLM brainstormed {len(items)} topics")
+            return items, "🧠 AI Brainstormed Topics"
+        except Exception as e2:
+            print(f"[Module 1] LLM brainstormer also failed ({e2}). Returning empty list.")
+            return [], "⚠️ No Trend Data"
 
 
 def fetch_google_news_snippets(query: str) -> list[str]:
@@ -80,7 +165,9 @@ def fetch_google_news_snippets(query: str) -> list[str]:
     Provides fresh context so the LLM doesn't have to guess trends.
     Returns up to 10 headline strings.
     """
-    url = f"https://news.google.com/search?q={requests.utils.quote(query)}&hl=en-US&gl=US"
+    url = (
+        f"https://news.google.com/search?q={requests.utils.quote(query)}&hl=en-US&gl=US"
+    )
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -117,14 +204,20 @@ def build_script_prompt(
     music_genre = style_profile["music_genre"]
     visual_theme = style_profile["visual_theme"]
 
-    trends_block = "\n".join(
-        [f"  - {item['query']} (interest score: {item['value']})"
-         for item in trending_queries]
-    ) or "  (No trend data returned — use general knowledge)"
+    trends_block = (
+        "\n".join(
+            [
+                f"  - {item['query']} (interest score: {item['value']})"
+                for item in trending_queries
+            ]
+        )
+        or "  (No trend data returned — use general knowledge)"
+    )
 
-    news_block = "\n".join(
-        [f"  - {h}" for h in news_headlines]
-    ) or "  (No live headlines retrieved)"
+    news_block = (
+        "\n".join([f"  - {h}" for h in news_headlines])
+        or "  (No live headlines retrieved)"
+    )
 
     prompt = textwrap.dedent(f"""
         You are an elite viral short-form video scriptwriter for {niche}.
@@ -155,10 +248,17 @@ def build_script_prompt(
         Do NOT stop writing early. Expand each section with full storytelling depth.
 
         ══ PACING CUE RULE ══
-        Embed these markers directly in the text where natural:
-          [Pause 1s]  — after the hook opener, between major thoughts, before reveals
-          [Emphasis]  — immediately before a key word or phrase the speaker should stress
-        These markers are for the voiceover engine and do NOT count toward word totals.
+        You MUST embed these exact markers inside the spoken text where natural.
+        They are NOT spoken aloud — they are director cues for the voiceover engine.
+        They use double angle-brackets so they are visually unmistakable from dialogue.
+
+          <<PAUSE>>  — insert a 1-second silent beat (after opener, before reveals,
+                       between tips). Placed between sentences, never mid-sentence.
+          <<STRESS>> — placed immediately before a single key word or short phrase
+                       the speaker should emphasize (e.g. "the <<STRESS>> worst thing").
+
+        IMPORTANT: These markers must look NOTHING like normal prose. Always use
+        exactly <<PAUSE>> or <<STRESS>> — no brackets, no quotes, no variations.
 
         ══ 4-PART NARRATIVE STRUCTURE ══
 
@@ -167,13 +267,13 @@ def build_script_prompt(
         - Open with one unexpected, scroll-stopping line.
         - Reference the #1 trending query if it fits naturally.
         - End on a hard cliffhanger. Make skipping feel like a mistake.
-        - Use [Pause 1s] after the opening line.
-        - Example structure: "Most people think X. [Pause 1s] They're wrong."
+        - Place <<PAUSE>> after the opening line.
+        - Example: "Most people think saving 10% is enough. <<PAUSE>> It's not even close."
 
         ── PART 2: THE STAKES (8–20 sec) ── Target: 25–30 spoken words
         - Answer immediately: "Why does this matter RIGHT NOW?"
         - Drop one specific stat, date, or real-world consequence from the trend data.
-        - Use [Emphasis] before the key stat or number.
+        - Use <<STRESS>> directly before the key stat or number.
         - Build urgency without clickbait. Be precise.
 
         ── PART 3: THE MEAT (20–52 sec) ── Target: 80–95 spoken words
@@ -183,18 +283,18 @@ def build_script_prompt(
         Sub-point 1 (tip1):
         - Lead with a bold statement grounded in the trend data.
         - Follow with 1–2 sentences that explain WHY or HOW.
-        - End with [Pause 1s] before moving to sub-point 2.
+        - End with <<PAUSE>> before moving to sub-point 2.
 
         Sub-point 2 (tip2):
         - Introduce a contrasting or complementary angle.
         - Back it with a specific detail or consequence.
-        - Use [Emphasis] on the most important word.
-        - End with [Pause 1s].
+        - Use <<STRESS>> on the single most important word.
+        - End with <<PAUSE>>.
 
         Sub-point 3 (tip3):
         - Deliver the most actionable, surprising insight last.
         - Make it feel like something they can do today.
-        - Use [Emphasis] before the core action word.
+        - Use <<STRESS>> before the core action word.
 
         ── PART 4: RETENTION CTA (52–60 sec) ── Target: 20–25 spoken words
         CTA style: {cta_style}
@@ -224,7 +324,7 @@ def build_script_prompt(
 
 # ── Validation helpers ────────────────────────────────────────────────────────
 
-PACING_CUE_PATTERN = ["[Pause 1s]", "[Emphasis]"]
+PACING_CUE_PATTERN = ["<<PAUSE>>", "<<STRESS>>"]
 
 
 def _extract_spoken_text(script: dict) -> str:
@@ -241,11 +341,13 @@ def _extract_spoken_text(script: dict) -> str:
     return " ".join(parts)
 
 
-def verify_script_length(script_text: str, target_seconds: int = 60) -> tuple[bool, str]:
+def verify_script_length(
+    script_text: str, target_seconds: int = 60
+) -> tuple[bool, str]:
     """
     Validate that the spoken script fills the target video duration.
 
-    Pacing cues ([Pause 1s], [Emphasis]) are stripped before counting
+    Pacing cues ('[Pause 1s]','[Emphasis]') are stripped before counting
     so they don't inflate the word total.
 
     Standard voiceover pacing: ~2.5 words/second.
@@ -269,6 +371,7 @@ def verify_script_length(script_text: str, target_seconds: int = 60) -> tuple[bo
 
 # ── Groq call + retry logic ───────────────────────────────────────────────────
 
+
 def _call_groq(client: Groq, messages: list[dict]) -> str:
     """Raw Groq API call. Returns the stripped response text."""
     completion = client.chat.completions.create(
@@ -280,7 +383,11 @@ def _call_groq(client: Groq, messages: list[dict]) -> str:
     raw = completion.choices[0].message.content.strip()
     if raw.startswith("```"):
         lines = raw.split("\n")
-        raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+        raw = (
+            "\n".join(lines[1:-1])
+            if lines[-1].strip() == "```"
+            else "\n".join(lines[1:])
+        )
     return raw
 
 
@@ -348,7 +455,7 @@ def generate_script(prompt: str, target_seconds: int = 60) -> dict:
             - PART 3 (meat): each of tip1, tip2, tip3 MUST have 2–3 full sentences.
               Explain the WHY and the HOW — do not just state a fact and move on.
             - PART 4 (cta): expand to include a teaser of what's coming next.
-            - Embed [Pause 1s] and [Emphasis] markers throughout.
+            - Embed <<PAUSE>> and <<STRESS>> markers throughout.
             - Total spoken words (excluding pacing cues) MUST reach at least 150.
 
             Return ONLY the updated JSON object in the same format.
@@ -377,7 +484,12 @@ def generate_script(prompt: str, target_seconds: int = 60) -> dict:
     return script
 
 
-def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> str:
+def format_telegram_message(
+    niche: str,
+    script: dict,
+    trending: list[dict],
+    trends_source: str = "📡 Live Google Trends",
+) -> str:
     """
     Build the Telegram message using the style_profile visual identity.
     Renders the 4-part narrative structure with clear section labels.
@@ -387,17 +499,22 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
     theme = style_profile["visual_theme"].upper().replace("_", " ")
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
-    top_trends = "\n".join(
-        [f"  {i+1}. {t['query']} ({t['value']})"
-         for i, t in enumerate(trending[:5])]
-    ) or "  (unavailable)"
+    top_trends = (
+        "\n".join(
+            [
+                f"  {i + 1}. {t['query']} ({t['value']})"
+                for i, t in enumerate(trending[:5])
+            ]
+        )
+        or "  (unavailable)"
+    )
 
-    hook_text   = script.get("hook", "").strip()
+    hook_text = script.get("hook", "").strip()
     stakes_text = script.get("stakes", "").strip()
-    cta_text    = script.get("cta", "").strip()
-    thumbnail   = script.get("thumbnail_text", "")
-    word_count  = script.get("actual_word_count", "—")
-    length_ok   = script.get("length_ok", True)
+    cta_text = script.get("cta", "").strip()
+    thumbnail = script.get("thumbnail_text", "")
+    word_count = script.get("actual_word_count", "—")
+    length_ok = script.get("length_ok", True)
     length_badge = "✅ on target" if length_ok else "⚠️ short"
 
     meat = script.get("meat", {})
@@ -411,7 +528,7 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
     keywords = script.get("keywords", [])
     mood_tags = script.get("mood_tags", [])
     keywords_str = ", ".join(keywords) if isinstance(keywords, list) else str(keywords)
-    mood_str     = ", ".join(mood_tags) if isinstance(mood_tags, list) else str(mood_tags)
+    mood_str = ", ".join(mood_tags) if isinstance(mood_tags, list) else str(mood_tags)
 
     message = (
         f"🎬 *MODULE 1 — TREND RESEARCH & SCRIPT*\n"
@@ -419,7 +536,7 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
         f"*Theme:* {theme}\n"
         f"*Niche:* {niche}\n"
         f"*Generated:* {timestamp}\n\n"
-        f"📊 *TOP TRENDING QUERIES*\n{top_trends}\n\n"
+        f"📊 *TOP TRENDING QUERIES* — _{trends_source}_\n{top_trends}\n\n"
         f"`{sep}`\n"
         f"📝 *SCRIPT — 4\\-PART NARRATIVE*\n"
         f"_{word_count} spoken words — {length_badge}_\n\n"
@@ -470,18 +587,20 @@ def run_trend_research(niche: str | None = None) -> dict:
     """
     niche = niche or NICHE_DEFAULT
 
+    client = _init_groq()
+
     print(f"[Module 1] Fetching trends for niche: '{niche}'")
-    trending = fetch_pytrends(niche)
+    trending, trends_source = fetch_trends(niche, client)
 
     top_query = trending[0]["query"] if trending else niche
-    print(f"[Module 1] Top trending query: '{top_query}' — fetching news headlines...")
+    print(f"[Module 1] Top query: '{top_query}' — fetching news headlines...")
     headlines = fetch_google_news_snippets(top_query)
 
-    print(f"[Module 1] Building grounded prompt and calling Groq (Llama 3.3 70B)...")
+    print(f"[Module 1] Building prompt and calling Groq (Llama 3.3 70B)...")
     prompt = build_script_prompt(niche, trending, headlines)
     script = generate_script(prompt)
 
-    tg_message = format_telegram_message(niche, script, trending)
+    tg_message = format_telegram_message(niche, script, trending, trends_source)
 
     return {
         "niche": niche,

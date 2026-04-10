@@ -1009,6 +1009,20 @@ wheels = [
 ]
 
 [[package]]
+name = "pytrends-modern"
+version = "0.2.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "lxml" },
+    { name = "pandas" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/73/43/457d5efcb92c2da48d4999736f1e4037fccac7fc319d13bd57519b2b208d/pytrends_modern-0.2.5.tar.gz", hash = "sha256:297902f2ff577b5b50053014eb89f366637fa918d0f373419843ad14be03322b", size = 51889, upload-time = "2026-03-05T21:21:27.347Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/68/10/40a0517c47d5c93d9f58036a99092e02429d2739194bcc69f10380ddefdb/pytrends_modern-0.2.5-py3-none-any.whl", hash = "sha256:c43bc742ea23224ff372e8a4df18a5827dfd31f8e1b10a7f9a486ef7ea0ddf25", size = 44669, upload-time = "2026-03-05T21:21:25.411Z" },
+]
+
+[[package]]
 name = "repl-nix-workspace"
 version = "0.1.0"
 source = { virtual = "." }
@@ -1019,6 +1033,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "python-telegram-bot" },
     { name = "pytrends" },
+    { name = "pytrends-modern" },
     { name = "requests" },
 ]
 
@@ -1030,6 +1045,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "python-telegram-bot", specifier = ">=22.7" },
     { name = "pytrends", specifier = ">=4.9.2" },
+    { name = "pytrends-modern", specifier = ">=0.2.5" },
     { name = "requests", specifier = ">=2.33.1" },
 ]
 
