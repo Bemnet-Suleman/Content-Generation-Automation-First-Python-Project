@@ -1,0 +1,44 @@
+Role: You are a Python Automation Architect. Build a Telegram Bot Agent designed for end-to-end YouTube/TikTok content creation.
+Constraints: Use only free, open-source libraries. Optimize for Replit’s limited CPU/RAM by using external APIs for heavy lifting.
+
+Module 1: Trend Research & Scripting
+
+Tool: pytrends + BeautifulSoup (Scraping) + Replit AI (for logic).
+
+Logic: Identify trending topics in [INSERT YOUR NICHE]. Generate a viral-style script (Hook, Body, CTA).
+
+Optimization: Don't let the LLM "guess" trends. Have it analyze raw data from Pytrends first.
+
+Module 2: Asset Sourcing (The Hands)
+
+Visuals: Use requests to call Pexels and Pixabay APIs. Search for vertical clips (9:16) matching the script’s keywords.
+
+Audio SFX: Use freesound-python to fetch sound effects based on script cues.
+
+Background Music: Use ytmusicapi to find royalty-free/No Copyright tracks.
+
+Voiceover: Use kokoro-onnx. (Note: If Replit RAM is too low, fallback to Edge-TTS).
+
+Module 3: Video Assembly & Delivery
+
+Assembly: Use MoviePy or FFmpeg to layer assets.
+
+Workflow: 1. Send raw files separately to Telegram (for my manual edit).
+2. Send a "Blended" preview version (automated edit).
+
+Captions: Generate .srt files or burnt-in text using Whisper-timestamped.
+
+Module 4: YouTube Management
+
+Tool: google-api-python-client.
+
+Logic: Fetch channel analytics (views, CTR, retention). Suggest improvements for the next script based on what worked.
+
+Critical Efficiency Tips for Replit:
+The "Heavy" Library Problem: MoviePy can be a memory hog. If your Repl keeps crashing during the "gluing" phase, tell the agent to use FFmpeg commands directly via subprocess. It is much lighter on Replit's resources.
+
+Persistent Storage: Replit's file system can be wiped if not used correctly. Use Replit App Storage (Object Storage) to save your .mp4 and .mp3 files so they don't disappear between runs.
+
+Hugging Face Secret: Since you want Kokoro for the voice, don't download the model every time the bot starts. Save the model files (.onnx and voices.json) into a permanent folder in your Repl.
+
+Copyright Safety: Instead of ytmusicapi (which might accidentally pull copyrighted songs), instruct your agent to specifically search for "Creative Commons" or "No Copyright Music" tags.
