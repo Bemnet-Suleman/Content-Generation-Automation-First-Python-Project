@@ -4,15 +4,19 @@ Module 1: Trend Research & Scripting
 Uses pytrends to fetch real trending data, then feeds raw trend signals
 into Groq (Llama 3.3 70B) to generate a viral-style video script.
 
-4-Part Narrative Structure (min 180 spoken words):
-  1. Pattern Interrupt  — Hook that stops the scroll
-  2. The Stakes         — Why this matters right now
-  3. The Meat           — 3 distinct, fact-backed tips or insights
-  4. Retention CTA      — Keeps them subscribed and coming back
+4-Part Narrative Structure (60-second target, min 150 spoken words):
+  1. Pattern Interrupt  — Hook that stops the scroll           (15–20 words)
+  2. The Stakes         — Why this matters right now           (25–30 words)
+  3. The Meat           — 3 sub-points × 2-3 sentences each   (80–95 words)
+  4. Retention CTA      — Keeps them subscribed                (20–25 words)
 
-Every output reflects the centralized style_profile — tone, hook style,
-CTA style, and formatting all come from that single dictionary so that
-every module reads from the same cloth.
+Pacing cues ([Pause 1s], [Emphasis]) are embedded in the script text
+to guide the voiceover engine and fill time naturally.
+
+Validation: if the generated script is under 140 words, the LLM is
+asked to rewrite it with more depth before returning to the user.
+
+Every output reflects the centralized style_profile.
 
 Entry points (called by the Telegram bot handler):
     run_trend_research(niche: str) -> dict
@@ -132,7 +136,7 @@ def build_script_prompt(
         - Hook Style   : {hook_style}
         - CTA Style    : {cta_style}
         - Caption Font : {style_profile["font"]} at {style_profile["caption_font_size"]}px
-          (write short, punchy sentences that fit cleanly on screen)
+          (short punchy sentences that fit cleanly on one caption line)
 
         LIVE TREND DATA (analyze this before writing — do NOT guess):
         Top trending search queries for "{niche}" right now:
@@ -142,44 +146,64 @@ def build_script_prompt(
         {news_block}
 
         TASK:
-        Using the trend data above as your foundation, write a 90-second
-        vertical video script (YouTube Shorts / TikTok) for viewers interested
-        in {niche}.
+        Write a 60-second vertical video script (YouTube Shorts / TikTok)
+        for viewers interested in {niche}.
 
-        The script MUST follow this exact 4-part narrative structure.
-        The TOTAL spoken word count across all four parts MUST be at least 180 words.
+        ══ STRICT WORD COUNT RULE ══
+        The TOTAL spoken word count (ignoring pacing cues) MUST be at least 150 words.
+        Standard pacing is 2.5 words/second × 60 seconds = 150 words minimum.
+        Do NOT stop writing early. Expand each section with full storytelling depth.
 
-        ── PART 1: PATTERN INTERRUPT (0–8 sec) ──
+        ══ PACING CUE RULE ══
+        Embed these markers directly in the text where natural:
+          [Pause 1s]  — after the hook opener, between major thoughts, before reveals
+          [Emphasis]  — immediately before a key word or phrase the speaker should stress
+        These markers are for the voiceover engine and do NOT count toward word totals.
+
+        ══ 4-PART NARRATIVE STRUCTURE ══
+
+        ── PART 1: PATTERN INTERRUPT (0–8 sec) ── Target: 15–20 spoken words
         Hook style: {hook_style}
-        - Shatter the viewer's autopilot with one line they did NOT expect.
+        - Open with one unexpected, scroll-stopping line.
         - Reference the #1 trending query if it fits naturally.
-        - End on a cliffhanger that makes skipping feel like a mistake.
-        - Target: 20–30 words.
+        - End on a hard cliffhanger. Make skipping feel like a mistake.
+        - Use [Pause 1s] after the opening line.
+        - Example structure: "Most people think X. [Pause 1s] They're wrong."
 
-        ── PART 2: THE STAKES (8–25 sec) ──
-        - Immediately answer: "Why does this matter RIGHT NOW?"
-        - Use a specific stat, date, or real-world consequence drawn from the trend data.
-        - Build urgency without sounding clickbait.
-        - Target: 35–45 words.
+        ── PART 2: THE STAKES (8–20 sec) ── Target: 25–30 spoken words
+        - Answer immediately: "Why does this matter RIGHT NOW?"
+        - Drop one specific stat, date, or real-world consequence from the trend data.
+        - Use [Emphasis] before the key stat or number.
+        - Build urgency without clickbait. Be precise.
 
-        ── PART 3: THE MEAT (25–75 sec) ──
-        - Deliver exactly 3 distinct, numbered tips or facts — each grounded in the trend data.
-        - Each tip must feel like something the viewer could act on today.
-        - Separate each tip clearly (Tip 1 / Tip 2 / Tip 3).
-        - Write in short, staccato sentences optimized for caption display.
-        - Do NOT pad. Do NOT repeat. Every word earns its screen time.
-        - Target: 90–110 words across all 3 tips.
+        ── PART 3: THE MEAT (20–52 sec) ── Target: 80–95 spoken words
+        Write exactly 3 sub-points. Each sub-point MUST have 2–3 full sentences of depth.
+        Do NOT write one-liners. Explain, illustrate, give context.
 
-        ── PART 4: RETENTION CTA (75–90 sec) ──
+        Sub-point 1 (tip1):
+        - Lead with a bold statement grounded in the trend data.
+        - Follow with 1–2 sentences that explain WHY or HOW.
+        - End with [Pause 1s] before moving to sub-point 2.
+
+        Sub-point 2 (tip2):
+        - Introduce a contrasting or complementary angle.
+        - Back it with a specific detail or consequence.
+        - Use [Emphasis] on the most important word.
+        - End with [Pause 1s].
+
+        Sub-point 3 (tip3):
+        - Deliver the most actionable, surprising insight last.
+        - Make it feel like something they can do today.
+        - Use [Emphasis] before the core action word.
+
+        ── PART 4: RETENTION CTA (52–60 sec) ── Target: 20–25 spoken words
         CTA style: {cta_style}
-        - Do NOT just say "like and subscribe." Give them a specific reason to come back.
-        - Tease what they'll miss if they don't follow.
-        - Feel urgent. Feel personal. Feel like a promise.
-        - Target: 25–35 words.
+        - Do NOT say just "like and subscribe."
+        - Tease one specific thing they will miss if they don't follow.
+        - Feel personal. Feel urgent. Feel like a kept promise.
 
-        After the script, provide supporting metadata.
-
-        Return ONLY a valid JSON object with these exact keys — no markdown, no extra text:
+        ══ OUTPUT FORMAT ══
+        Return ONLY a valid JSON object — no markdown fences, no extra text:
         {{
           "hook": "...",
           "stakes": "...",
@@ -189,7 +213,6 @@ def build_script_prompt(
             "tip3": "..."
           }},
           "cta": "...",
-          "word_count": <integer — total spoken words across all 4 parts>,
           "keywords": ["...", "..."],
           "mood_tags": ["...", "..."],
           "thumbnail_text": "..."
@@ -199,38 +222,70 @@ def build_script_prompt(
     return prompt
 
 
-def generate_script(prompt: str) -> dict:
-    """
-    Send the data-grounded prompt to Groq (Llama 3.3 70B) and parse the JSON response.
-    Returns a dict with keys:
-        hook, stakes, meat (tip1/tip2/tip3), cta,
-        word_count, keywords, mood_tags, thumbnail_text
-    """
-    client = _init_groq()
+# ── Validation helpers ────────────────────────────────────────────────────────
 
-    chat_completion = client.chat.completions.create(
+PACING_CUE_PATTERN = ["[Pause 1s]", "[Emphasis]"]
+
+
+def _extract_spoken_text(script: dict) -> str:
+    """Concatenate all spoken parts into one string for word-count validation."""
+    meat = script.get("meat", {})
+    parts = [
+        script.get("hook", ""),
+        script.get("stakes", ""),
+        meat.get("tip1", "") if isinstance(meat, dict) else "",
+        meat.get("tip2", "") if isinstance(meat, dict) else "",
+        meat.get("tip3", "") if isinstance(meat, dict) else "",
+        script.get("cta", ""),
+    ]
+    return " ".join(parts)
+
+
+def verify_script_length(script_text: str, target_seconds: int = 60) -> tuple[bool, str]:
+    """
+    Validate that the spoken script fills the target video duration.
+
+    Pacing cues ([Pause 1s], [Emphasis]) are stripped before counting
+    so they don't inflate the word total.
+
+    Standard voiceover pacing: ~2.5 words/second.
+    Pass threshold: 90% of target duration.
+
+    Returns:
+        (True,  "Length is perfect.")                        — passes
+        (False, "Too short (N words). Need more detail.")    — fails
+    """
+    clean = script_text
+    for cue in PACING_CUE_PATTERN:
+        clean = clean.replace(cue, "")
+
+    word_count = len(clean.split())
+    estimated_seconds = word_count / 2.5
+
+    if estimated_seconds < (target_seconds * 0.9):
+        return False, f"Too short ({word_count} words). Need more detail."
+    return True, "Length is perfect."
+
+
+# ── Groq call + retry logic ───────────────────────────────────────────────────
+
+def _call_groq(client: Groq, messages: list[dict]) -> str:
+    """Raw Groq API call. Returns the stripped response text."""
+    completion = client.chat.completions.create(
         model=GROQ_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are an elite viral short-form video scriptwriter. "
-                    "Always respond with valid JSON only — no markdown fences, "
-                    "no preamble, no explanation. Just the raw JSON object."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
+        messages=messages,
         temperature=0.8,
         max_tokens=2048,
     )
-
-    raw = chat_completion.choices[0].message.content.strip()
-
+    raw = completion.choices[0].message.content.strip()
     if raw.startswith("```"):
         lines = raw.split("\n")
         raw = "\n".join(lines[1:-1]) if lines[-1].strip() == "```" else "\n".join(lines[1:])
+    return raw
 
+
+def _parse_json(raw: str) -> dict:
+    """Parse JSON response, returning a safe fallback dict on failure."""
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
@@ -239,12 +294,87 @@ def generate_script(prompt: str) -> dict:
             "stakes": "",
             "meat": {"tip1": "", "tip2": "", "tip3": ""},
             "cta": "",
-            "word_count": 0,
             "keywords": [],
             "mood_tags": [],
             "thumbnail_text": "",
             "raw_response": raw,
         }
+
+
+def generate_script(prompt: str, target_seconds: int = 60) -> dict:
+    """
+    Send the data-grounded prompt to Groq (Llama 3.3 70B).
+
+    Validation loop:
+      1. Generate the script.
+      2. Count actual spoken words (pacing cues stripped).
+      3. If under the 90%-of-target threshold, send one retry with an
+         explicit expansion instruction appended to the conversation.
+      4. Return whichever version passes (or the retry result regardless).
+
+    Returns a dict with keys:
+        hook, stakes, meat (tip1/tip2/tip3), cta,
+        actual_word_count, length_ok,
+        keywords, mood_tags, thumbnail_text
+    """
+    client = _init_groq()
+    system_msg = {
+        "role": "system",
+        "content": (
+            "You are an elite viral short-form video scriptwriter. "
+            "Always respond with valid JSON only — no markdown fences, "
+            "no preamble, no explanation. Just the raw JSON object."
+        ),
+    }
+
+    # ── Attempt 1 ────────────────────────────────────────────────────────────
+    messages = [system_msg, {"role": "user", "content": prompt}]
+    raw = _call_groq(client, messages)
+    script = _parse_json(raw)
+
+    spoken = _extract_spoken_text(script)
+    length_ok, verdict = verify_script_length(spoken, target_seconds)
+    print(f"[Module 1] Script validation attempt 1: {verdict}")
+
+    # ── Retry if too short ────────────────────────────────────────────────────
+    if not length_ok:
+        expansion_instruction = textwrap.dedent(f"""
+            The script you just wrote is {verdict}
+
+            Rewrite it now with significantly more depth and storytelling.
+            Rules for the rewrite:
+            - PART 1 (hook): keep it sharp but add one extra sentence of intrigue.
+            - PART 2 (stakes): add a second specific stat or real-world consequence.
+            - PART 3 (meat): each of tip1, tip2, tip3 MUST have 2–3 full sentences.
+              Explain the WHY and the HOW — do not just state a fact and move on.
+            - PART 4 (cta): expand to include a teaser of what's coming next.
+            - Embed [Pause 1s] and [Emphasis] markers throughout.
+            - Total spoken words (excluding pacing cues) MUST reach at least 150.
+
+            Return ONLY the updated JSON object in the same format.
+        """).strip()
+
+        messages = [
+            system_msg,
+            {"role": "user", "content": prompt},
+            {"role": "assistant", "content": raw},
+            {"role": "user", "content": expansion_instruction},
+        ]
+        raw = _call_groq(client, messages)
+        script = _parse_json(raw)
+
+        spoken = _extract_spoken_text(script)
+        length_ok, verdict = verify_script_length(spoken, target_seconds)
+        print(f"[Module 1] Script validation attempt 2: {verdict}")
+
+    # Attach our own verified word count — don't trust the LLM's self-report
+    clean_spoken = spoken
+    for cue in PACING_CUE_PATTERN:
+        clean_spoken = clean_spoken.replace(cue, "")
+    script["actual_word_count"] = len(clean_spoken.split())
+    script["length_ok"] = length_ok
+
+    return script
 
 
 def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> str:
@@ -266,7 +396,9 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
     stakes_text = script.get("stakes", "").strip()
     cta_text    = script.get("cta", "").strip()
     thumbnail   = script.get("thumbnail_text", "")
-    word_count  = script.get("word_count", "—")
+    word_count  = script.get("actual_word_count", "—")
+    length_ok   = script.get("length_ok", True)
+    length_badge = "✅ on target" if length_ok else "⚠️ short"
 
     meat = script.get("meat", {})
     if isinstance(meat, dict):
@@ -290,7 +422,7 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
         f"📊 *TOP TRENDING QUERIES*\n{top_trends}\n\n"
         f"`{sep}`\n"
         f"📝 *SCRIPT — 4\\-PART NARRATIVE*\n"
-        f"_~{word_count} spoken words_\n\n"
+        f"_{word_count} spoken words — {length_badge}_\n\n"
         f"⚡ *PART 1 — PATTERN INTERRUPT* _(0–8 sec)_\n"
         f"{hook_text}\n\n"
         f"🔥 *PART 2 — THE STAKES* _(8–25 sec)_\n"
