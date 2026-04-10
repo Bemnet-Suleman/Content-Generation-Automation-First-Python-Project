@@ -208,7 +208,7 @@ def build_script_prompt(
     trends_block = (
         "\n".join(
             [
-                f"  - {item['query']} (interest score: {item['value']})"
+                f"  - {item['query']} (popularity: {item['value']})"
                 for item in trending_queries
             ]
         )
@@ -558,9 +558,9 @@ def format_telegram_message(
         f"🔥 <b>PART 2 — THE STAKES</b> <i>(8–20 sec)</i>\n"
         f"{stakes_text}\n\n"
         f"🧠 <b>PART 3 — THE MEAT</b> <i>(20–52 sec)</i>\n"
-        f"<b>Tip 1:</b> {tip1}\n\n"
-        f"<b>Tip 2:</b> {tip2}\n\n"
-        f"<b>Tip 3:</b> {tip3}\n\n"
+        f"<b>①</b> {tip1}\n\n"
+        f"<b>②</b> {tip2}\n\n"
+        f"<b>③</b> {tip3}\n\n"
         f"🎯 <b>PART 4 — RETENTION CTA</b> <i>(52–60 sec)</i>\n"
         f"{cta_text}\n\n"
         f"<code>{sep}</code>\n"
