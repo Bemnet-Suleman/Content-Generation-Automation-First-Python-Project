@@ -1,7 +1,7 @@
 """
 Module 1: Trend Research & Scripting
 -------------------------------------
-Trend source  : pytrends-modern (stable) → LLM Topic Brainstormer fallback
+Trend source  : pytrends (Google Trends) → LLM Topic Brainstormer fallback
 Script engine : Groq / Llama 3.3 70B
 
 4-Part Narrative Structure (60-second target, min 150 spoken words):
@@ -49,18 +49,18 @@ def _init_groq() -> Groq:
     return Groq(api_key=GROQ_API_KEY)
 
 
-def _fetch_pytrends_modern(niche: str) -> list[dict]:
+def _fetch_pytrends(niche: str) -> list[dict]:
     """
-    Pull trending related queries via pytrends-modern (more stable Google Trends API).
+    Pull related queries from Google Trends via pytrends.
     Returns list of {"query": str, "value": int, "source": "google_trends"}.
     Raises on any failure so the caller can fall back gracefully.
     """
-    from pytrends_modern.request import TrendReq  # lazy import — only used here
+    from pytrends.request import TrendReq  # lazy import — only used here
 
-    pytrends = TrendReq(hl="en-US", tz=360)
-    pytrends.build_payload([niche], timeframe=TRENDS_TIMEFRAME, geo=TRENDS_GEO)
+    pt = TrendReq(hl="en-US", tz=360, timeout=(10, 25), retries=1, backoff_factor=0.5)
+    pt.build_payload([niche], timeframe=TRENDS_TIMEFRAME, geo=TRENDS_GEO)
 
-    related = pytrends.related_queries()
+    related = pt.related_queries()
     trending_items = []
 
     for kw, data in related.items():
@@ -74,7 +74,7 @@ def _fetch_pytrends_modern(niche: str) -> list[dict]:
                 })
 
     if not trending_items:
-        raise ValueError("pytrends-modern returned no results")
+        raise ValueError("pytrends returned no results")
 
     trending_items.sort(key=lambda x: x["value"], reverse=True)
     return trending_items[:15]
@@ -146,11 +146,11 @@ def fetch_trends(niche: str, groq_client: Groq) -> tuple[list[dict], str]:
         source_label is "📡 Live Google Trends" or "🧠 AI Brainstormed Topics"
     """
     try:
-        items = _fetch_pytrends_modern(niche)
-        print(f"[Module 1] Trends source: pytrends-modern ({len(items)} queries)")
+        items = _fetch_pytrends(niche)
+        print(f"[Module 1] Trends source: Google Trends ({len(items)} queries)")
         return items, "📡 Live Google Trends"
     except Exception as e:
-        print(f"[Module 1] pytrends-modern failed ({e}). Falling back to LLM brainstormer.")
+        print(f"[Module 1] Google Trends failed ({e}). Falling back to LLM brainstormer.")
         try:
             items = _brainstorm_trends_llm(niche, groq_client)
             print(f"[Module 1] LLM brainstormed {len(items)} topics")
