@@ -487,20 +487,13 @@ def generate_script(prompt: str, target_seconds: int = 60) -> dict:
 
 def _esc_html(text: str) -> str:
     """
-    Escape HTML special characters in LLM-generated text, then render
-    pacing cues as styled inline badges instead of raw marker strings.
-
-    Flow:
-      1. Escape & → &amp;, < → &lt;, > → &gt;  (safe for Telegram HTML)
-      2. After escaping, <<PAUSE>> becomes &lt;&lt;PAUSE&gt;&gt; and
-         <<STRESS>> becomes &lt;&lt;STRESS&gt;&gt;
-      3. Replace those escaped forms with styled HTML badges.
+    Prepare LLM-generated text for Telegram HTML mode:
+      1. Replace pacing cues with plain emoji (before HTML escaping).
+      2. Escape & < > so nothing in the prose can open an HTML tag.
     """
+    text = text.replace("<<PAUSE>>", " ⏸ ")
+    text = text.replace("<<STRESS>>", "🔊")
     text = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-    text = text.replace("&lt;&lt;PAUSE&gt;&gt;", " <code>⏸</code> ")
-    text = text.replace("&lt;&lt;STRESS&gt;&gt;", "<b><u>")
-    # <<STRESS>> wraps the next word — close the tag after the next word boundary
-    text = re.sub(r"<b><u>(\S+)", r"<b><u>\1</u></b>", text)
     return text
 
 
