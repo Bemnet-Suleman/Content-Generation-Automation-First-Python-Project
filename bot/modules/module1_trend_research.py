@@ -205,16 +205,6 @@ def build_script_prompt(
     music_genre = style_profile["music_genre"]
     visual_theme = style_profile["visual_theme"]
 
-    trends_block = (
-        "\n".join(
-            [
-                f"  - {item['query']} (popularity: {item['value']})"
-                for item in trending_queries
-            ]
-        )
-        or "  (No trend data returned — use general knowledge)"
-    )
-
     news_block = (
         "\n".join([f"  - {h}" for h in news_headlines])
         or "  (No live headlines retrieved)"
@@ -232,11 +222,7 @@ def build_script_prompt(
         - Caption Font : {style_profile["font"]} at {style_profile["caption_font_size"]}px
           (short punchy sentences that fit cleanly on one caption line)
 
-        LIVE TREND DATA (analyze this before writing — do NOT guess):
-        Top trending search queries for "{niche}" right now:
-        {trends_block}
-
-        Latest news headlines related to "{niche}":
+        LATEST NEWS HEADLINES for "{niche}" (use these for facts and context only):
         {news_block}
 
         TASK:
@@ -532,11 +518,13 @@ def format_telegram_message(
 
     meat = script.get("meat", {})
     if isinstance(meat, dict):
-        tip1 = _esc_html(meat.get("tip1", "").strip())
-        tip2 = _esc_html(meat.get("tip2", "").strip())
-        tip3 = _esc_html(meat.get("tip3", "").strip())
+        meat_body = " ".join(
+            _esc_html(meat.get(k, "").strip())
+            for k in ("tip1", "tip2", "tip3")
+            if meat.get(k, "").strip()
+        )
     else:
-        tip1 = tip2 = tip3 = ""
+        meat_body = ""
 
     keywords = script.get("keywords", [])
     mood_tags = script.get("mood_tags", [])
@@ -558,9 +546,7 @@ def format_telegram_message(
         f"🔥 <b>PART 2 — THE STAKES</b> <i>(8–20 sec)</i>\n"
         f"{stakes_text}\n\n"
         f"🧠 <b>PART 3 — THE MEAT</b> <i>(20–52 sec)</i>\n"
-        f"<b>①</b> {tip1}\n\n"
-        f"<b>②</b> {tip2}\n\n"
-        f"<b>③</b> {tip3}\n\n"
+        f"{meat_body}\n\n"
         f"🎯 <b>PART 4 — RETENTION CTA</b> <i>(52–60 sec)</i>\n"
         f"{cta_text}\n\n"
         f"<code>{sep}</code>\n"
