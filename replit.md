@@ -52,7 +52,7 @@ Every module reads from `bot/config/style_profile.py`. Keys include:
 
 ### Module 1 — Trend Research & Scripting
 
-- **Tools**: pytrends, BeautifulSoup, Google Gemini (free tier via google-generativeai)
+- **Tools**: pytrends, BeautifulSoup, Groq SDK (Llama 3.3 70B)
 - **Flow**: Fetch live Google Trends data → scrape news headlines → build data-grounded prompt → generate viral script (Hook/Body/CTA) → send formatted Telegram message
 - **Bot commands**: `/start`, `/script`, `/script [niche]`
 
@@ -61,7 +61,7 @@ Every module reads from `bot/config/style_profile.py`. Keys include:
 | Secret | Description |
 |--------|-------------|
 | `TELEGRAM_BOT_TOKEN` | From @BotFather on Telegram |
-| `GEMINI_API_KEY` | From Google AI Studio (free tier) |
+| `GROQ_API_KEY` | From console.groq.com (free tier) |
 
 ### Optional Env Vars
 

@@ -2,7 +2,7 @@
 Module 1: Trend Research & Scripting
 -------------------------------------
 Uses pytrends to fetch real trending data, then feeds raw trend signals
-into Google Gemini (free tier) to generate a viral-style video script.
+into Groq (Llama 3.3 70B) to generate a viral-style video script.
 
 Every output reflects the centralized style_profile — tone, hook style,
 CTA style, and formatting all come from that single dictionary so that
@@ -14,32 +14,30 @@ Entry points (called by the Telegram bot handler):
 
 import os
 import json
-import time
 import textwrap
 from datetime import datetime
 
 import requests
 from bs4 import BeautifulSoup
 from pytrends.request import TrendReq
-
-import google.generativeai as genai
+from groq import Groq
 
 from bot.config import style_profile
 
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODEL = "llama-3.3-70b-versatile"
 NICHE_DEFAULT = os.getenv("CONTENT_NICHE", "personal finance tips")
 TRENDS_GEO = os.getenv("TRENDS_GEO", "US")
 TRENDS_TIMEFRAME = os.getenv("TRENDS_TIMEFRAME", "now 7-d")
 
 
-def _init_gemini():
-    if not GEMINI_API_KEY:
+def _init_groq() -> Groq:
+    if not GROQ_API_KEY:
         raise EnvironmentError(
-            "GEMINI_API_KEY is not set. Add it as a Replit secret."
+            "GROQ_API_KEY is not set. Add it as a Replit secret."
         )
-    genai.configure(api_key=GEMINI_API_KEY)
-    return genai.GenerativeModel("gemini-1.5-flash")
+    return Groq(api_key=GROQ_API_KEY)
 
 
 def fetch_pytrends(niche: str) -> list[dict]:
@@ -165,6 +163,8 @@ def build_script_prompt(
 
         Format your response as valid JSON with keys:
         "hook", "body", "cta", "keywords", "mood_tags", "thumbnail_text"
+
+        Return ONLY the JSON object — no markdown fences, no extra text.
     """).strip()
 
     return prompt
@@ -172,12 +172,29 @@ def build_script_prompt(
 
 def generate_script(prompt: str) -> dict:
     """
-    Send the data-grounded prompt to Gemini and parse the JSON response.
+    Send the data-grounded prompt to Groq (Llama 3.3 70B) and parse the JSON response.
     Returns a dict with keys: hook, body, cta, keywords, mood_tags, thumbnail_text
     """
-    model = _init_gemini()
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
+    client = _init_groq()
+
+    chat_completion = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are an expert viral short-form video scriptwriter. "
+                    "Always respond with valid JSON only — no markdown fences, "
+                    "no preamble, no explanation. Just the raw JSON object."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.8,
+        max_tokens=1024,
+    )
+
+    raw = chat_completion.choices[0].message.content.strip()
 
     if raw.startswith("```"):
         lines = raw.split("\n")
@@ -200,8 +217,8 @@ def generate_script(prompt: str) -> dict:
 def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> str:
     """
     Build the Telegram message using the style_profile visual identity.
-    Uses the profile's caption color (shown as emoji stand-in in text),
-    label conventions, and tone to present the script to the user.
+    Uses the profile's caption color, label conventions, and tone to
+    present the script to the user.
     """
     sep = "─" * 36
     label_color = style_profile["caption_color"]
@@ -246,7 +263,8 @@ def format_telegram_message(niche: str, script: dict, trending: list[dict]) -> s
         f"🔑 *ASSET KEYWORDS:* {keywords_str}\n"
         f"🎵 *MOOD TAGS:* {mood_str}\n"
         f"🖼 *THUMBNAIL TEXT:* `{thumbnail}`\n\n"
-        f"_Style: {label_color} captions · {style_profile['font']} · {style_profile['music_genre']}_"
+        f"_Style: {label_color} captions · {style_profile['font']} · {style_profile['music_genre']}_\n"
+        f"_Model: Llama 3.3 70B via Groq_"
     )
 
     return message
@@ -260,7 +278,7 @@ def run_trend_research(niche: str | None = None) -> dict:
       1. Fetch real trending queries via pytrends
       2. Scrape live news headlines for context
       3. Build a data-grounded prompt (no LLM guessing)
-      4. Generate the script via Gemini
+      4. Generate the script via Groq / Llama 3.3 70B
       5. Return a dict with script data + Telegram message
 
     Args:
@@ -285,7 +303,7 @@ def run_trend_research(niche: str | None = None) -> dict:
     print(f"[Module 1] Top trending query: '{top_query}' — fetching news headlines...")
     headlines = fetch_google_news_snippets(top_query)
 
-    print(f"[Module 1] Building grounded prompt and calling Gemini...")
+    print(f"[Module 1] Building grounded prompt and calling Groq (Llama 3.3 70B)...")
     prompt = build_script_prompt(niche, trending, headlines)
     script = generate_script(prompt)
 

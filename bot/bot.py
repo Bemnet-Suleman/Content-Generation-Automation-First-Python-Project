@@ -64,7 +64,7 @@ async def cmd_script(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     except EnvironmentError as e:
         await update.message.reply_text(
             f"⚠️ *Configuration Error*\n`{e}`\n\n"
-            f"Add your `GEMINI_API_KEY` as a Replit secret.",
+            f"Add your `GROQ_API_KEY` as a Replit secret.",
             parse_mode="Markdown",
         )
     except Exception as e:
