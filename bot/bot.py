@@ -20,7 +20,7 @@ from telegram.ext import (
 )
 
 from bot.modules.module1_trend_research import run_trend_research
-from bot.modules.module2_asset_sourcing import run_asset_sourcing
+from bot.modules.module2_asset_sourcing import run_asset_sourcing, PexelsAuthError
 from bot.config import style_profile
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
@@ -109,6 +109,13 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     try:
         assets = run_asset_sourcing(script_result)
+    except PexelsAuthError:
+        await update.message.reply_text(
+            "❌ <b>Pexels API Key Invalid.</b> Check your Secrets.\n"
+            "Go to the Secrets tab and verify <code>PEXELS_API_KEY</code> is correct.",
+            parse_mode="HTML",
+        )
+        return
     except Exception as e:
         logger.exception("Module 2 error")
         await update.message.reply_text(
@@ -118,6 +125,7 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     sent = 0
+    vo_engine = assets.get("voiceover_engine", "")
 
     # ── Video clips ──────────────────────────────────────────────────────────
     for i, path in enumerate(assets.get("visuals", []), 1):
@@ -127,14 +135,14 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         try:
             await update.message.reply_video(
                 p.open("rb"),
-                caption=f"🎥 <b>Visual clip {i}</b> — {p.name}",
+                caption=f"🎥 <b>Visual {i}</b> — {p.name}",
                 parse_mode="HTML",
             )
             sent += 1
         except Exception as e:
             logger.warning(f"Failed to send visual {path}: {e}")
             await update.message.reply_text(
-                f"⚠️ Could not send visual clip {i} (<code>{p.name}</code>): file may be too large.",
+                f"⚠️ Visual {i} (<code>{p.name}</code>) could not be sent — file may exceed Telegram's 50 MB limit.",
                 parse_mode="HTML",
             )
 
@@ -142,39 +150,40 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     vo = assets.get("voiceover")
     if vo and Path(vo).exists():
         try:
-            engine = "kokoro-onnx" if vo.endswith(".wav") else "edge-tts"
             await update.message.reply_audio(
                 Path(vo).open("rb"),
-                caption=f"🎙 <b>Voiceover</b> — {engine} / {os.path.basename(vo)}",
+                caption=f"🎙 <b>Voiceover</b> — {vo_engine}",
                 parse_mode="HTML",
             )
             sent += 1
         except Exception as e:
             logger.warning(f"Failed to send voiceover: {e}")
-    else:
-        await update.message.reply_text(
-            "⚠️ Voiceover generation failed. Check that <code>edge-tts</code> is installed.",
-            parse_mode="HTML",
-        )
 
-    # ── Background music ─────────────────────────────────────────────────────
-    music = assets.get("music")
-    if music and Path(music).exists():
+    # ── Mixed audio (voice + ducked music) ───────────────────────────────────
+    mixed = assets.get("music_mixed")
+    if mixed and Path(mixed).exists():
         try:
             await update.message.reply_audio(
-                Path(music).open("rb"),
-                caption=f"🎵 <b>Background music</b> — {os.path.basename(music)}",
+                Path(mixed).open("rb"),
+                caption="🎚 <b>Mixed audio</b> — voiceover + music ducked –20 dB",
                 parse_mode="HTML",
             )
             sent += 1
         except Exception as e:
-            logger.warning(f"Failed to send music: {e}")
+            logger.warning(f"Failed to send mixed audio: {e}")
     else:
-        await update.message.reply_text(
-            "⚠️ Background music could not be sourced. "
-            "ytmusicapi/yt-dlp and FMA both failed — you can upload a local track.",
-            parse_mode="HTML",
-        )
+        # Fall back to sending raw music if mixing failed
+        music = assets.get("music")
+        if music and Path(music).exists():
+            try:
+                await update.message.reply_audio(
+                    Path(music).open("rb"),
+                    caption="🎵 <b>Background music</b> (raw — mixing unavailable)",
+                    parse_mode="HTML",
+                )
+                sent += 1
+            except Exception as e:
+                logger.warning(f"Failed to send music: {e}")
 
     # ── SFX ──────────────────────────────────────────────────────────────────
     for i, path in enumerate(assets.get("sfx", []), 1):
@@ -192,19 +201,16 @@ async def cmd_assets(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             logger.warning(f"Failed to send SFX {path}: {e}")
 
     # ── Summary ──────────────────────────────────────────────────────────────
+    failures = assets.get("failures", [])
+    summary_lines = [f"✅ <b>Module 2 complete</b> — {sent} file(s) delivered"]
+    if failures:
+        summary_lines.append(f"\n⚠️ <b>{len(failures)} issue(s):</b>")
+        for f in failures:
+            summary_lines.append(f"  • {f}")
     if sent == 0:
-        await update.message.reply_text(
-            "❌ No assets could be sent. Check that your API keys are set:\n"
-            "<code>PEXELS_API_KEY</code>, <code>PIXABAY_API_KEY</code>, "
-            "<code>FREESOUND_API_KEY</code> (optional)",
-            parse_mode="HTML",
-        )
-    else:
-        await update.message.reply_text(
-            f"✅ <b>Module 2 complete</b> — {sent} asset(s) delivered.\n"
-            f"<i>Review quality, then run /assemble when ready.</i>",
-            parse_mode="HTML",
-        )
+        summary_lines.insert(0, "❌ <b>No files could be sent.</b>\n")
+    summary_lines.append("\n<i>Review quality, then run /assemble when ready.</i>")
+    await update.message.reply_text("\n".join(summary_lines), parse_mode="HTML")
 
 
 # ── App ────────────────────────────────────────────────────────────────────────

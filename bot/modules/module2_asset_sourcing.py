@@ -1,16 +1,18 @@
 """
 Module 2: Asset Sourcing — "The Hands"
 ---------------------------------------
-Sources every asset needed to assemble the final video.
 All assets strictly follow style_profile (Dark Cinematic, Lo-fi Suspense).
 
-  Visuals   : Pexels API → Pixabay fallback  (portrait, cinematic dark)
-  Voiceover : kokoro-onnx → edge-tts fallback (en-US-GuyNeural)
+  Visuals   : Pexels (portrait, 720–1080px) → Pixabay fallback
+              Zero-result retry: strips query to main noun and retries once.
+              401 propagates as PexelsAuthError so the bot can alert the user.
+  Voiceover : Azure Speech REST → edge-tts AndrewNeural → BrianNeural
   Music     : ytmusicapi + yt-dlp → FMA API fallback
   SFX       : Freesound API (2 atmospheric clips)
+  Mixing    : pydub — music ducked to –20 dB below voiceover level
 
-Output: local file paths — each sent directly to Telegram as a separate file.
-Entry point: run_asset_sourcing(script_result: dict) -> dict
+Entry point: run_asset_sourcing(script_result) -> dict
+  Returns: visuals, voiceover, music, music_mixed, sfx, failures, run_dir
 """
 
 import os
@@ -29,16 +31,20 @@ from bot.config import style_profile
 PEXELS_API_KEY    = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY   = os.getenv("PIXABAY_API_KEY", "")
 FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "")
+AZURE_SPEECH_KEY  = os.getenv("AZURE_SPEECH_KEY", "")
+AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "eastus")
 
-# Style modifiers appended to every visual search (from style_profile)
-_THEME = style_profile["visual_theme"].replace("_", " ")   # "dark cinematic"
 STYLE_MODIFIERS = "cinematic dark high contrast moody noir"
-
-TTS_VOICE = "en-US-GuyNeural"
 ASSETS_DIR = Path("assets/module2")
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
-MAX_VIDEO_MB = 45   # Telegram bot limit is 50 MB — stay well under
+MAX_VIDEO_MB = 45
+
+
+# ── CUSTOM EXCEPTIONS ──────────────────────────────────────────────────────────
+
+class PexelsAuthError(Exception):
+    """Raised when Pexels returns 401 — lets the bot send a targeted alert."""
 
 
 # ── HELPERS ────────────────────────────────────────────────────────────────────
@@ -54,8 +60,14 @@ def _slug(text: str, max_len: int = 30) -> str:
     return re.sub(r"[^\w]", "_", text)[:max_len]
 
 
+def _main_noun(query: str) -> str:
+    """Return only the first meaningful word from the query (the main noun)."""
+    words = [w for w in query.split() if len(w) > 2]
+    return words[0] if words else query.split()[0]
+
+
 def _download(url: str, out: Path, headers: dict | None = None, max_mb: int = MAX_VIDEO_MB) -> bool:
-    """Stream-download url → out, abort if file exceeds max_mb."""
+    """Stream-download url → out; abort if file exceeds max_mb."""
     try:
         with requests.get(url, stream=True, timeout=60, headers=headers or {}) as r:
             r.raise_for_status()
@@ -64,19 +76,19 @@ def _download(url: str, out: Path, headers: dict | None = None, max_mb: int = MA
                 for chunk in r.iter_content(65_536):
                     size += len(chunk)
                     if size > max_mb * 1_048_576:
-                        print(f"[Module 2] {out.name} exceeded {max_mb} MB — skipping")
+                        print(f"[M2] {out.name} > {max_mb} MB — skipped")
                         out.unlink(missing_ok=True)
                         return False
                     f.write(chunk)
         return out.exists() and out.stat().st_size > 0
     except Exception as e:
-        print(f"[Module 2] Download failed ({url[:60]}...): {e}")
+        print(f"[M2] Download error ({url[:60]}): {e}")
         out.unlink(missing_ok=True)
         return False
 
 
 def _build_script_text(script: dict) -> str:
-    """Join the 4 narrative parts into clean spoken text (pacing cues stripped)."""
+    """Join 4-part narrative into clean spoken text (pacing cues stripped)."""
     meat = script.get("meat", {})
     parts = [
         script.get("hook", ""),
@@ -93,43 +105,78 @@ def _build_script_text(script: dict) -> str:
 
 # ── VISUALS ────────────────────────────────────────────────────────────────────
 
-def _pexels_video(keyword: str, out_dir: Path) -> str | None:
-    """Download best-fitting portrait video from Pexels."""
-    if not PEXELS_API_KEY:
+def _pexels_search(query: str) -> list[dict]:
+    """
+    Call Pexels video search.
+    Raises PexelsAuthError on 401.
+    Returns empty list on zero results.
+    """
+    r = requests.get(
+        "https://api.pexels.com/videos/search",
+        headers={"Authorization": PEXELS_API_KEY},
+        params={"query": query, "orientation": "portrait", "per_page": 3},
+        timeout=15,
+    )
+    if r.status_code == 401:
+        raise PexelsAuthError("Pexels API key is invalid (401 Unauthorized)")
+    r.raise_for_status()
+    return r.json().get("videos", [])
+
+
+def _best_pexels_file(video: dict) -> str | None:
+    """Pick the first video file with 720 ≤ width ≤ 1080 (portrait, memory-safe)."""
+    candidates = [
+        f for f in video.get("video_files", [])
+        if 720 <= f.get("width", 0) <= 1080
+    ]
+    if not candidates:
         return None
-    query = f"{keyword} {STYLE_MODIFIERS}"
+    candidates.sort(key=lambda f: f.get("file_size", 9_999_999_999))
+    return candidates[0]["link"]
+
+
+def _pexels_video(keyword: str, out_dir: Path) -> tuple[str | None, str | None]:
+    """
+    Download one portrait clip from Pexels.
+    Returns (path, failure_reason) — exactly one is None.
+    Raises PexelsAuthError if key is invalid.
+    """
+    if not PEXELS_API_KEY:
+        return None, "PEXELS_API_KEY not set"
+
+    full_query = f"{keyword} {STYLE_MODIFIERS}"
     try:
-        r = requests.get(
-            "https://api.pexels.com/videos/search",
-            headers={"Authorization": PEXELS_API_KEY},
-            params={"query": query, "orientation": "portrait", "size": "medium", "per_page": 5},
-            timeout=15,
-        )
-        r.raise_for_status()
-        videos = r.json().get("videos", [])
+        videos = _pexels_search(full_query)
+
+        # Zero-result retry: strip to main noun
         if not videos:
-            return None
+            noun = _main_noun(keyword)
+            print(f"[M2] Pexels: 0 results for '{full_query}' — retrying with '{noun}'")
+            videos = _pexels_search(noun)
+
+        if not videos:
+            return None, f"Pexels: 0 results for '{keyword}' (even after noun retry)"
+
         for video in videos:
-            files = sorted(
-                [f for f in video.get("video_files", []) if f.get("width", 0) >= 720],
-                key=lambda f: f.get("file_size", 9_999_999_999),
-            )
-            if not files:
+            url = _best_pexels_file(video)
+            if not url:
                 continue
-            url = files[0]["link"]
             out = out_dir / f"visual_{_slug(keyword)}_pexels.mp4"
             if _download(url, out):
-                print(f"[Module 2] Pexels clip saved: {out.name}")
-                return str(out)
+                print(f"[M2] Pexels ✓ {out.name}")
+                return str(out), None
+
+        return None, f"Pexels: no file in 720–1080px range for '{keyword}'"
+    except PexelsAuthError:
+        raise
     except Exception as e:
-        print(f"[Module 2] Pexels error for '{keyword}': {e}")
-    return None
+        return None, f"Pexels error for '{keyword}': {e}"
 
 
-def _pixabay_video(keyword: str, out_dir: Path) -> str | None:
+def _pixabay_video(keyword: str, out_dir: Path) -> tuple[str | None, str | None]:
     """Fallback: portrait video from Pixabay."""
     if not PIXABAY_API_KEY:
-        return None
+        return None, "PIXABAY_API_KEY not set"
     query = f"{keyword} {STYLE_MODIFIERS}"
     try:
         r = requests.get(
@@ -139,105 +186,177 @@ def _pixabay_video(keyword: str, out_dir: Path) -> str | None:
         )
         r.raise_for_status()
         hits = r.json().get("hits", [])
+
+        # Zero-result retry with main noun
         if not hits:
-            return None
+            noun = _main_noun(keyword)
+            print(f"[M2] Pixabay: 0 results for '{query}' — retrying with '{noun}'")
+            r2 = requests.get(
+                "https://pixabay.com/api/videos/",
+                params={"key": PIXABAY_API_KEY, "q": noun, "orientation": "vertical", "per_page": 3},
+                timeout=15,
+            )
+            r2.raise_for_status()
+            hits = r2.json().get("hits", [])
+
+        if not hits:
+            return None, f"Pixabay: 0 results for '{keyword}' (even after noun retry)"
+
         url = hits[0]["videos"]["medium"]["url"]
         out = out_dir / f"visual_{_slug(keyword)}_pixabay.mp4"
         if _download(url, out):
-            print(f"[Module 2] Pixabay clip saved: {out.name}")
-            return str(out)
+            print(f"[M2] Pixabay ✓ {out.name}")
+            return str(out), None
+
+        return None, f"Pixabay: download failed for '{keyword}'"
     except Exception as e:
-        print(f"[Module 2] Pixabay error for '{keyword}': {e}")
-    return None
+        return None, f"Pixabay error for '{keyword}': {e}"
 
 
-def fetch_visuals(keywords: list[str], out_dir: Path) -> list[str]:
-    """Source 1 portrait video clip per keyword (max 3). Pexels → Pixabay."""
-    paths = []
+def fetch_visuals(keywords: list[str], out_dir: Path) -> tuple[list[str], list[str]]:
+    """
+    Source 1 portrait clip per keyword (max 3).
+    Returns (paths, failures).
+    Raises PexelsAuthError if Pexels key is invalid.
+    """
+    paths, failures = [], []
     for kw in keywords[:3]:
-        print(f"[Module 2] Sourcing visual for keyword: '{kw}'")
-        path = _pexels_video(kw, out_dir) or _pixabay_video(kw, out_dir)
+        print(f"[M2] Visual → '{kw}'")
+        path, reason = _pexels_video(kw, out_dir)   # may raise PexelsAuthError
+        if path:
+            paths.append(path)
+            continue
+        failures.append(f"Pexels '{kw}': {reason}")
+
+        path, reason = _pixabay_video(kw, out_dir)
         if path:
             paths.append(path)
         else:
-            print(f"[Module 2] No visual found for '{kw}' — check API keys")
-    return paths
+            failures.append(f"Pixabay '{kw}': {reason}")
+    return paths, failures
 
 
 # ── VOICEOVER ──────────────────────────────────────────────────────────────────
 
-def generate_voiceover(script_text: str, out_dir: Path) -> str | None:
+def _azure_tts(text: str, out: Path) -> bool:
     """
-    Generate voiceover audio from the full script text.
-    Tier 1: kokoro-onnx (requires model files in working dir)
-    Tier 2: edge-tts CLI (en-US-GuyNeural, no model download needed)
+    Azure Cognitive Services TTS via REST API.
+    Voice: en-US-AvaMultilingualNeural
+    No native SDK needed — pure HTTP.
     """
-    # ── Tier 1: kokoro-onnx ──────────────────────────────────────────
+    if not AZURE_SPEECH_KEY:
+        return False
+    ssml = (
+        f"<speak version='1.0' xml:lang='en-US'>"
+        f"<voice name='en-US-AvaMultilingualNeural'>{text}</voice>"
+        f"</speak>"
+    )
+    url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
     try:
-        from kokoro_onnx import Kokoro
-        import soundfile as sf
+        r = requests.post(
+            url,
+            headers={
+                "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
+                "Content-Type": "application/ssml+xml",
+                "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
+            },
+            data=ssml.encode("utf-8"),
+            timeout=60,
+        )
+        if r.status_code == 200:
+            out.write_bytes(r.content)
+            return out.stat().st_size > 0
+        print(f"[M2] Azure TTS HTTP {r.status_code}: {r.text[:200]}")
+        return False
+    except Exception as e:
+        print(f"[M2] Azure TTS error: {e}")
+        return False
 
-        model_path  = "kokoro-v1.onnx"
-        voices_path = "voices.json"
-        if not (Path(model_path).exists() and Path(voices_path).exists()):
-            raise FileNotFoundError("kokoro model files not found in working directory")
 
-        print("[Module 2] Attempting kokoro-onnx voiceover...")
-        kokoro = Kokoro(model_path, voices_path)
-        samples, sr = kokoro.create(script_text, voice="af_sarah", speed=1.0, lang="en-us")
-        out = out_dir / "voiceover.wav"
-        sf.write(str(out), samples, sr)
-        print("[Module 2] Voiceover generated via kokoro-onnx ✓")
+def _edge_tts(text: str, voice: str, out: Path) -> bool:
+    """Run edge-tts CLI for the given voice."""
+    try:
+        res = subprocess.run(
+            ["edge-tts", "--text", text, "--voice", voice, "--write-media", str(out)],
+            capture_output=True, text=True, timeout=90,
+        )
+        return res.returncode == 0 and out.exists() and out.stat().st_size > 0
+    except Exception as e:
+        print(f"[M2] edge-tts ({voice}) error: {e}")
+        return False
+
+
+def generate_voiceover(script_text: str, out_dir: Path) -> tuple[str | None, str]:
+    """
+    Generate voiceover. Returns (path, engine_label).
+    Tier 1: Azure Speech REST (en-US-AvaMultilingualNeural) — if AZURE_SPEECH_KEY set
+    Tier 2: edge-tts (en-US-AndrewNeural)
+    Tier 3: edge-tts (en-US-BrianNeural)
+    """
+    # Tier 1 — Azure
+    if AZURE_SPEECH_KEY:
+        print("[M2] Voiceover → Azure (AvaMultilingualNeural)...")
+        out = out_dir / "voiceover_azure.mp3"
+        if _azure_tts(script_text, out):
+            print("[M2] Voiceover ✓ Azure")
+            return str(out), "Azure AvaMultilingualNeural"
+        print("[M2] Azure TTS failed — falling back to edge-tts")
+
+    # Tier 2 — edge-tts AndrewNeural
+    print("[M2] Voiceover → edge-tts (AndrewNeural)...")
+    out = out_dir / "voiceover.mp3"
+    if _edge_tts(script_text, "en-US-AndrewNeural", out):
+        print("[M2] Voiceover ✓ edge-tts AndrewNeural")
+        return str(out), "edge-tts AndrewNeural"
+
+    # Tier 3 — edge-tts BrianNeural
+    print("[M2] AndrewNeural failed — trying BrianNeural...")
+    out2 = out_dir / "voiceover_brian.mp3"
+    if _edge_tts(script_text, "en-US-BrianNeural", out2):
+        print("[M2] Voiceover ✓ edge-tts BrianNeural")
+        return str(out2), "edge-tts BrianNeural"
+
+    return None, "all TTS engines failed"
+
+
+# ── AUDIO MIXING ───────────────────────────────────────────────────────────────
+
+def mix_music_under_voice(voiceover_path: str, music_path: str, out_dir: Path) -> str | None:
+    """
+    Duck background music to –20 dB below voiceover using pydub.
+    Loops/trims music to match voiceover duration.
+    Returns path to mixed MP3, or None on failure.
+    """
+    try:
+        from pydub import AudioSegment
+
+        print("[M2] Mixing: loading audio files...")
+        voice = AudioSegment.from_file(voiceover_path)
+        music = AudioSegment.from_file(music_path)
+
+        # Loop music until it covers the full voiceover length
+        while len(music) < len(voice):
+            music = music + music
+        music = music[: len(voice)]
+
+        # Duck music so it sits –20 dB below the voiceover's average loudness
+        target_dBFS = voice.dBFS - 20.0
+        adjustment  = target_dBFS - music.dBFS
+        music = music + adjustment
+
+        mixed = voice.overlay(music)
+        out = out_dir / "mixed_audio.mp3"
+        mixed.export(str(out), format="mp3", bitrate="192k")
+        print(f"[M2] Mixed audio ✓ (voice {voice.dBFS:.1f} dBFS | music ducked to {target_dBFS:.1f} dBFS)")
         return str(out)
     except Exception as e:
-        print(f"[Module 2] kokoro-onnx unavailable ({type(e).__name__}: {e}) — falling back to edge-tts")
-
-    # ── Tier 2: edge-tts ─────────────────────────────────────────────
-    try:
-        out = out_dir / "voiceover.mp3"
-        result = subprocess.run(
-            ["edge-tts", "--text", script_text, "--voice", TTS_VOICE, "--write-media", str(out)],
-            capture_output=True,
-            text=True,
-            timeout=90,
-        )
-        if result.returncode == 0 and out.exists() and out.stat().st_size > 0:
-            print(f"[Module 2] Voiceover generated via edge-tts ({TTS_VOICE}) ✓")
-            return str(out)
-        print(f"[Module 2] edge-tts error: {result.stderr.strip()}")
-    except Exception as e:
-        print(f"[Module 2] edge-tts failed: {e}")
-
-    return None
+        print(f"[M2] Audio mixing failed: {e}")
+        return None
 
 
 # ── MUSIC ──────────────────────────────────────────────────────────────────────
 
-def _ytdlp_download(url: str, out_path: str) -> bool:
-    """Download audio track from a YouTube URL via yt-dlp."""
-    try:
-        result = subprocess.run(
-            [
-                "yt-dlp", "-x",
-                "--audio-format", "mp3",
-                "--audio-quality", "5",
-                "--max-filesize", "45m",
-                "--no-playlist",
-                "-o", out_path,
-                url,
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-        return result.returncode == 0 and Path(out_path).exists() and Path(out_path).stat().st_size > 0
-    except Exception as e:
-        print(f"[Module 2] yt-dlp failed: {e}")
-        return False
-
-
 def _ytmusic_download(query: str, out_path: str) -> bool:
-    """Search YouTube Music for query and download audio via yt-dlp."""
     try:
         from ytmusicapi import YTMusic
         ytm = YTMusic()
@@ -248,19 +367,19 @@ def _ytmusic_download(query: str, out_path: str) -> bool:
         if not video_id:
             return False
         yt_url = f"https://www.youtube.com/watch?v={video_id}"
-        title = results[0].get("title", "track")
-        print(f"[Module 2] Downloading music: '{title}' ({video_id})")
-        return _ytdlp_download(yt_url, out_path)
+        print(f"[M2] yt-dlp downloading: {results[0].get('title', video_id)}")
+        res = subprocess.run(
+            ["yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", "5",
+             "--max-filesize", "45m", "--no-playlist", "-o", out_path, yt_url],
+            capture_output=True, text=True, timeout=120,
+        )
+        return res.returncode == 0 and Path(out_path).exists() and Path(out_path).stat().st_size > 0
     except Exception as e:
-        print(f"[Module 2] ytmusicapi error: {e}")
+        print(f"[M2] ytmusicapi error: {e}")
         return False
 
 
 def _fma_download(out_path: str) -> bool:
-    """
-    Fallback: download a lo-fi/ambient track from Free Music Archive.
-    Uses the public JSON API — no key required.
-    """
     try:
         r = requests.get(
             "https://freemusicarchive.org/api/get/tracks.json",
@@ -269,138 +388,144 @@ def _fma_download(out_path: str) -> bool:
         )
         if r.status_code != 200:
             return False
-        tracks = r.json().get("dataset", [])
-        for track in tracks:
+        for track in r.json().get("dataset", []):
             dl_url = track.get("track_file")
-            if dl_url:
-                if _download(dl_url, Path(out_path), max_mb=45):
-                    print("[Module 2] Music sourced via FMA ✓")
-                    return True
+            if dl_url and _download(dl_url, Path(out_path), max_mb=45):
+                print("[M2] Music ✓ FMA")
+                return True
     except Exception as e:
-        print(f"[Module 2] FMA error: {e}")
+        print(f"[M2] FMA error: {e}")
     return False
 
 
-def fetch_music(mood_tags: list[str], out_dir: Path) -> str | None:
-    """
-    Source a no-copyright lo-fi background track.
-    Tier 1: ytmusicapi + yt-dlp
-    Tier 2: Free Music Archive API
-    """
+def fetch_music(mood_tags: list[str], out_dir: Path) -> tuple[str | None, str | None]:
+    """Returns (path, failure_reason)."""
     mood_str = " ".join(mood_tags[:2]) if mood_tags else "lo-fi suspense"
-    query = f"no copyright {mood_str} lo-fi instrumental background music"
+    query = f"no copyright {mood_str} lo-fi instrumental background"
     out_path = str(out_dir / "background_music.mp3")
+    print(f"[M2] Music → '{query}'")
 
-    print(f"[Module 2] Sourcing music — query: '{query}'")
     if _ytmusic_download(query, out_path):
-        print("[Module 2] Music sourced via ytmusicapi + yt-dlp ✓")
-        return out_path
-
-    print("[Module 2] ytmusicapi/yt-dlp failed — trying FMA fallback")
+        return out_path, None
+    print("[M2] ytmusicapi/yt-dlp failed — trying FMA")
     if _fma_download(out_path):
-        return out_path
-
-    print("[Module 2] Music sourcing failed — all sources exhausted")
-    return None
+        return out_path, None
+    return None, "ytmusicapi + yt-dlp and FMA both failed — upload a local track"
 
 
 # ── SFX ────────────────────────────────────────────────────────────────────────
 
-def fetch_sfx(out_dir: Path) -> list[str]:
-    """
-    Download 1-2 atmospheric SFX clips from Freesound API.
-    Queries are derived from the style_profile mood (dark cinematic lo-fi).
-    """
+def fetch_sfx(out_dir: Path) -> tuple[list[str], list[str]]:
+    """Returns (paths, failures)."""
     if not FREESOUND_API_KEY:
-        print("[Module 2] FREESOUND_API_KEY not set — skipping SFX")
-        return []
+        return [], ["FREESOUND_API_KEY not set — SFX skipped"]
 
-    sfx_queries = ["dark ambient tension atmospheric", "cinematic subtle texture drone"]
-    paths = []
+    queries = ["dark ambient tension atmospheric", "cinematic subtle texture drone"]
+    paths, failures = [], []
 
-    for i, query in enumerate(sfx_queries, 1):
-        print(f"[Module 2] Sourcing SFX {i}: '{query}'")
+    for i, query in enumerate(queries, 1):
+        print(f"[M2] SFX {i} → '{query}'")
         try:
             r = requests.get(
                 "https://freesound.org/apiv2/search/text/",
                 params={
-                    "query": query,
-                    "token": FREESOUND_API_KEY,
+                    "query": query, "token": FREESOUND_API_KEY,
                     "fields": "name,previews,duration",
                     "filter": "duration:[5 TO 60]",
-                    "sort": "rating_desc",
-                    "page_size": 5,
+                    "sort": "rating_desc", "page_size": 5,
                 },
                 timeout=15,
             )
             results = r.json().get("results", [])
             if not results:
-                print(f"[Module 2] No SFX results for '{query}'")
+                failures.append(f"SFX {i}: no Freesound results for '{query}'")
                 continue
-
             preview_url = results[0]["previews"]["preview-hq-mp3"]
             sfx_out = out_dir / f"sfx_{i}.mp3"
-            ok = _download(
-                preview_url,
-                sfx_out,
-                headers={"Authorization": f"Token {FREESOUND_API_KEY}"},
-                max_mb=10,
-            )
+            ok = _download(preview_url, sfx_out,
+                           headers={"Authorization": f"Token {FREESOUND_API_KEY}"}, max_mb=10)
             if ok:
-                print(f"[Module 2] SFX {i} saved: {sfx_out.name} ✓")
+                print(f"[M2] SFX {i} ✓ {sfx_out.name}")
                 paths.append(str(sfx_out))
+            else:
+                failures.append(f"SFX {i}: download failed for '{query}'")
         except Exception as e:
-            print(f"[Module 2] SFX {i} error: {e}")
+            failures.append(f"SFX {i}: {e}")
 
-    return paths
+    return paths, failures
 
 
 # ── MAIN ENTRY POINT ───────────────────────────────────────────────────────────
 
 def run_asset_sourcing(script_result: dict) -> dict:
     """
-    Run all asset sourcing steps for a Module 1 script result.
+    Source all assets for a Module 1 script result.
 
     Returns:
-      {
-        "visuals"  : list[str],   # paths to video clips
-        "voiceover": str | None,  # path to voiceover audio file
-        "music"    : str | None,  # path to background music file
-        "sfx"      : list[str],   # paths to SFX clips
-        "run_dir"  : str,
-      }
+      visuals      : list[str]   — video clip paths
+      voiceover    : str | None  — voiceover audio path
+      voiceover_engine: str      — which engine was used
+      music        : str | None  — raw music path
+      music_mixed  : str | None  — music ducked –20 dB under voice (pydub)
+      sfx          : list[str]   — SFX paths
+      failures     : list[str]   — human-readable failure descriptions
+      run_dir      : str
     """
     out_dir = _run_dir()
-    print(f"[Module 2] Run directory: {out_dir}")
+    print(f"[M2] Run dir: {out_dir}")
+    failures: list[str] = []
 
     script    = script_result.get("script", {})
-    keywords  = script.get("keywords", [])
+    keywords  = script.get("keywords", []) or [script_result.get("niche", "cinematic")]
     mood_tags = script.get("mood_tags", [])
     script_text = _build_script_text(script)
 
-    if not keywords:
-        print("[Module 2] Warning: no keywords in script result — visuals may be generic")
-        keywords = [script_result.get("niche", "cinematic dark")]
+    # ── Step 1: Visuals ──────────────────────────────────────────────────────
+    print("[M2] ── 1/4  Visuals ────────────────────────────────────────────────")
+    try:
+        visuals, vis_failures = fetch_visuals(keywords, out_dir)
+        failures.extend(vis_failures)
+    except PexelsAuthError as e:
+        visuals = []
+        failures.append(f"❌ Pexels Auth: {e}")
+        # Re-raise so bot.py can send the dedicated alert message
+        raise
 
-    print("[Module 2] ── STEP 1 / 4  Visuals ───────────────────────────────────")
-    visuals = fetch_visuals(keywords, out_dir)
+    # ── Step 2: Voiceover ────────────────────────────────────────────────────
+    print("[M2] ── 2/4  Voiceover ──────────────────────────────────────────────")
+    voiceover, vo_engine = generate_voiceover(script_text, out_dir)
+    if not voiceover:
+        failures.append(f"Voiceover: {vo_engine}")
 
-    print("[Module 2] ── STEP 2 / 4  Voiceover ────────────────────────────────")
-    voiceover = generate_voiceover(script_text, out_dir)
+    # ── Step 3: Music ────────────────────────────────────────────────────────
+    print("[M2] ── 3/4  Music ──────────────────────────────────────────────────")
+    music, music_fail = fetch_music(mood_tags, out_dir)
+    if not music:
+        failures.append(f"Music: {music_fail}")
 
-    print("[Module 2] ── STEP 3 / 4  Background Music ─────────────────────────")
-    music = fetch_music(mood_tags, out_dir)
+    # ── Step 4: SFX ──────────────────────────────────────────────────────────
+    print("[M2] ── 4/4  SFX ────────────────────────────────────────────────────")
+    sfx, sfx_failures = fetch_sfx(out_dir)
+    failures.extend(sfx_failures)
 
-    print("[Module 2] ── STEP 4 / 4  SFX ──────────────────────────────────────")
-    sfx = fetch_sfx(out_dir)
+    # ── Audio mixing ─────────────────────────────────────────────────────────
+    music_mixed = None
+    if voiceover and music:
+        print("[M2] ── Mixing audio (pydub –20 dB duck) ────────────────────────")
+        music_mixed = mix_music_under_voice(voiceover, music, out_dir)
+        if not music_mixed:
+            failures.append("Audio mixing: pydub mix failed")
 
     total = len(visuals) + (1 if voiceover else 0) + (1 if music else 0) + len(sfx)
-    print(f"[Module 2] Done — {total} asset(s) ready in {out_dir}")
+    print(f"[M2] Complete — {total} asset(s) | {len(failures)} failure(s)")
 
     return {
-        "visuals":   visuals,
-        "voiceover": voiceover,
-        "music":     music,
-        "sfx":       sfx,
-        "run_dir":   str(out_dir),
+        "visuals":          visuals,
+        "voiceover":        voiceover,
+        "voiceover_engine": vo_engine,
+        "music":            music,
+        "music_mixed":      music_mixed,
+        "sfx":              sfx,
+        "failures":         failures,
+        "run_dir":          str(out_dir),
     }
