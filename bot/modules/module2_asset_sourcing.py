@@ -6,7 +6,7 @@ All assets strictly follow style_profile (Dark Cinematic, Lo-fi Suspense).
   Visuals   : Pexels (portrait, 720–1080px) → Pixabay fallback
               Zero-result retry: strips query to main noun and retries once.
               401 propagates as PexelsAuthError so the bot can alert the user.
-  Voiceover : Azure Speech REST → edge-tts AndrewNeural → BrianNeural
+  Voiceover : HF parler-tts (parler_tts_mini_v0.1) → edge-tts AndrewNeural → BrianNeural
   Music     : ytmusicapi + yt-dlp → FMA API fallback
   SFX       : Freesound API (2 atmospheric clips)
   Mixing    : pydub — music ducked to –20 dB below voiceover level
@@ -31,8 +31,7 @@ from bot.config import style_profile
 PEXELS_API_KEY    = os.getenv("PEXELS_API_KEY", "")
 PIXABAY_API_KEY   = os.getenv("PIXABAY_API_KEY", "")
 FREESOUND_API_KEY = os.getenv("FREESOUND_API_KEY", "")
-AZURE_SPEECH_KEY  = os.getenv("AZURE_SPEECH_KEY", "")
-AZURE_SPEECH_REGION = os.getenv("AZURE_SPEECH_REGION", "eastus")
+HF_TOKEN          = os.getenv("HF_TOKEN", "")
 
 STYLE_MODIFIERS = "cinematic dark high contrast moody noir"
 ASSETS_DIR = Path("assets/module2")
@@ -173,42 +172,77 @@ def _pexels_video(keyword: str, out_dir: Path) -> tuple[str | None, str | None]:
         return None, f"Pexels error for '{keyword}': {e}"
 
 
+_PIXABAY_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
+}
+
+
+def _pixabay_hit_url(hit: dict) -> str | None:
+    """
+    Navigate hit['videos'] per the Pixabay docs.
+    Prefers 'medium'; falls back to 'small'.
+    """
+    videos = hit.get("videos", {})
+    for size in ("medium", "small"):
+        entry = videos.get(size, {})
+        url = entry.get("url", "")
+        if url:
+            return url
+    return None
+
+
+def _pixabay_search(query: str) -> list[dict]:
+    """Single Pixabay API call. Returns hits list."""
+    r = requests.get(
+        "https://pixabay.com/api/videos/",
+        headers=_PIXABAY_HEADERS,
+        params={
+            "key": PIXABAY_API_KEY,
+            "q": query,
+            "orientation": "vertical",
+            "per_page": 3,
+        },
+        timeout=15,
+    )
+    r.raise_for_status()
+    return r.json().get("hits", [])
+
+
 def _pixabay_video(keyword: str, out_dir: Path) -> tuple[str | None, str | None]:
-    """Fallback: portrait video from Pixabay."""
+    """
+    Fallback: portrait video from Pixabay.
+    Exact traversal: hit['videos']['medium']['url'] → hit['videos']['small']['url'].
+    Zero-result retry: strips keyword to main noun and retries once.
+    """
     if not PIXABAY_API_KEY:
         return None, "PIXABAY_API_KEY not set"
-    query = f"{keyword} {STYLE_MODIFIERS}"
-    try:
-        r = requests.get(
-            "https://pixabay.com/api/videos/",
-            params={"key": PIXABAY_API_KEY, "q": query, "orientation": "vertical", "per_page": 3},
-            timeout=15,
-        )
-        r.raise_for_status()
-        hits = r.json().get("hits", [])
 
-        # Zero-result retry with main noun
+    full_query = f"{keyword} {STYLE_MODIFIERS}"
+    try:
+        hits = _pixabay_search(full_query)
+
         if not hits:
             noun = _main_noun(keyword)
-            print(f"[M2] Pixabay: 0 results for '{query}' — retrying with '{noun}'")
-            r2 = requests.get(
-                "https://pixabay.com/api/videos/",
-                params={"key": PIXABAY_API_KEY, "q": noun, "orientation": "vertical", "per_page": 3},
-                timeout=15,
-            )
-            r2.raise_for_status()
-            hits = r2.json().get("hits", [])
+            print(f"[M2] Pixabay: 0 results for '{full_query}' — retrying with '{noun}'")
+            hits = _pixabay_search(noun)
 
         if not hits:
             return None, f"Pixabay: 0 results for '{keyword}' (even after noun retry)"
 
-        url = hits[0]["videos"]["medium"]["url"]
-        out = out_dir / f"visual_{_slug(keyword)}_pixabay.mp4"
-        if _download(url, out):
-            print(f"[M2] Pixabay ✓ {out.name}")
-            return str(out), None
+        for hit in hits:
+            url = _pixabay_hit_url(hit)
+            if not url:
+                continue
+            out = out_dir / f"visual_{_slug(keyword)}_pixabay.mp4"
+            if _download(url, out):
+                print(f"[M2] Pixabay ✓ {out.name}")
+                return str(out), None
 
-        return None, f"Pixabay: download failed for '{keyword}'"
+        return None, f"Pixabay: no downloadable file found for '{keyword}'"
     except Exception as e:
         return None, f"Pixabay error for '{keyword}': {e}"
 
@@ -238,38 +272,35 @@ def fetch_visuals(keywords: list[str], out_dir: Path) -> tuple[list[str], list[s
 
 # ── VOICEOVER ──────────────────────────────────────────────────────────────────
 
-def _azure_tts(text: str, out: Path) -> bool:
+def _parler_tts(text: str, out: Path) -> bool:
     """
-    Azure Cognitive Services TTS via REST API.
-    Voice: en-US-AvaMultilingualNeural
-    No native SDK needed — pure HTTP.
+    Hugging Face Inference API — parler-tts/parler_tts_mini_v0.1
+    Sends text + voice description; receives WAV audio bytes.
+    Requires HF_TOKEN secret.
     """
-    if not AZURE_SPEECH_KEY:
+    if not HF_TOKEN:
         return False
-    ssml = (
-        f"<speak version='1.0' xml:lang='en-US'>"
-        f"<voice name='en-US-AvaMultilingualNeural'>{text}</voice>"
-        f"</speak>"
+    voice_description = (
+        "A deep, clear male voice with a calm and confident tone, "
+        "speaking at a measured pace. The recording is clean with no background noise."
     )
-    url = f"https://{AZURE_SPEECH_REGION}.tts.speech.microsoft.com/cognitiveservices/v1"
     try:
         r = requests.post(
-            url,
-            headers={
-                "Ocp-Apim-Subscription-Key": AZURE_SPEECH_KEY,
-                "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "audio-16khz-128kbitrate-mono-mp3",
-            },
-            data=ssml.encode("utf-8"),
-            timeout=60,
+            "https://api-inference.huggingface.co/models/parler-tts/parler_tts_mini_v0.1",
+            headers={"Authorization": f"Bearer {HF_TOKEN}"},
+            json={"inputs": text, "parameters": {"description": voice_description}},
+            timeout=120,
         )
         if r.status_code == 200:
             out.write_bytes(r.content)
-            return out.stat().st_size > 0
-        print(f"[M2] Azure TTS HTTP {r.status_code}: {r.text[:200]}")
+            if out.stat().st_size > 0:
+                return True
+            print("[M2] parler-tts: response was empty")
+            return False
+        print(f"[M2] parler-tts HTTP {r.status_code}: {r.text[:200]}")
         return False
     except Exception as e:
-        print(f"[M2] Azure TTS error: {e}")
+        print(f"[M2] parler-tts error: {e}")
         return False
 
 
@@ -289,18 +320,18 @@ def _edge_tts(text: str, voice: str, out: Path) -> bool:
 def generate_voiceover(script_text: str, out_dir: Path) -> tuple[str | None, str]:
     """
     Generate voiceover. Returns (path, engine_label).
-    Tier 1: Azure Speech REST (en-US-AvaMultilingualNeural) — if AZURE_SPEECH_KEY set
+    Tier 1: HF parler-tts (parler_tts_mini_v0.1) — if HF_TOKEN set
     Tier 2: edge-tts (en-US-AndrewNeural)
     Tier 3: edge-tts (en-US-BrianNeural)
     """
-    # Tier 1 — Azure
-    if AZURE_SPEECH_KEY:
-        print("[M2] Voiceover → Azure (AvaMultilingualNeural)...")
-        out = out_dir / "voiceover_azure.mp3"
-        if _azure_tts(script_text, out):
-            print("[M2] Voiceover ✓ Azure")
-            return str(out), "Azure AvaMultilingualNeural"
-        print("[M2] Azure TTS failed — falling back to edge-tts")
+    # Tier 1 — Hugging Face parler-tts
+    if HF_TOKEN:
+        print("[M2] Voiceover → HF parler-tts (parler_tts_mini_v0.1)...")
+        out = out_dir / "voiceover_parler.wav"
+        if _parler_tts(script_text, out):
+            print("[M2] Voiceover ✓ parler-tts")
+            return str(out), "HF parler-tts (parler_tts_mini_v0.1)"
+        print("[M2] parler-tts failed — falling back to edge-tts")
 
     # Tier 2 — edge-tts AndrewNeural
     print("[M2] Voiceover → edge-tts (AndrewNeural)...")
