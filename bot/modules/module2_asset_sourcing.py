@@ -272,21 +272,27 @@ def fetch_visuals(keywords: list[str], out_dir: Path) -> tuple[list[str], list[s
 
 # ── VOICEOVER ──────────────────────────────────────────────────────────────────
 
-def _parler_tts(text: str, out: Path) -> bool:
+_PARLER_URL = (
+    "https://router.huggingface.co/models/parler-tts/parler_tts_mini_v0.1"
+)
+
+
+def _parler_tts(text: str, out: Path) -> tuple[bool, str | None]:
     """
-    Hugging Face Inference API — parler-tts/parler_tts_mini_v0.1
-    Sends text + voice description; receives WAV audio bytes.
-    Requires HF_TOKEN secret.
+    HF Inference Router — parler-tts/parler_tts_mini_v0.1
+    Returns (success, error_detail).
+    error_detail is set (with URL + status) on any non-200 response.
     """
     if not HF_TOKEN:
-        return False
+        return False, None  # silently skip; no key configured
+
     voice_description = (
         "A deep, clear male voice with a calm and confident tone, "
         "speaking at a measured pace. The recording is clean with no background noise."
     )
     try:
         r = requests.post(
-            "https://api-inference.huggingface.co/models/parler-tts/parler_tts_mini_v0.1",
+            _PARLER_URL,
             headers={"Authorization": f"Bearer {HF_TOKEN}"},
             json={"inputs": text, "parameters": {"description": voice_description}},
             timeout=120,
@@ -294,14 +300,23 @@ def _parler_tts(text: str, out: Path) -> bool:
         if r.status_code == 200:
             out.write_bytes(r.content)
             if out.stat().st_size > 0:
-                return True
-            print("[M2] parler-tts: response was empty")
-            return False
-        print(f"[M2] parler-tts HTTP {r.status_code}: {r.text[:200]}")
-        return False
+                return True, None
+            detail = f"parler-tts 200 OK but response body was empty.\nURL tried: {_PARLER_URL}"
+            print(f"[M2] {detail}")
+            return False, detail
+
+        detail = (
+            f"parler-tts HTTP {r.status_code} from:\n"
+            f"<code>{_PARLER_URL}</code>\n"
+            f"Body: <code>{r.text[:300]}</code>"
+        )
+        print(f"[M2] {detail}")
+        return False, detail
+
     except Exception as e:
-        print(f"[M2] parler-tts error: {e}")
-        return False
+        detail = f"parler-tts request error: {e}\nURL: {_PARLER_URL}"
+        print(f"[M2] {detail}")
+        return False, detail
 
 
 def _edge_tts(text: str, voice: str, out: Path) -> bool:
@@ -317,20 +332,24 @@ def _edge_tts(text: str, voice: str, out: Path) -> bool:
         return False
 
 
-def generate_voiceover(script_text: str, out_dir: Path) -> tuple[str | None, str]:
+def generate_voiceover(script_text: str, out_dir: Path) -> tuple[str | None, str, str | None]:
     """
-    Generate voiceover. Returns (path, engine_label).
+    Generate voiceover. Returns (path, engine_label, hf_error).
+    hf_error is an HTML-formatted string if parler-tts returned a non-200, else None.
     Tier 1: HF parler-tts (parler_tts_mini_v0.1) — if HF_TOKEN set
     Tier 2: edge-tts (en-US-AndrewNeural)
     Tier 3: edge-tts (en-US-BrianNeural)
     """
+    hf_error: str | None = None
+
     # Tier 1 — Hugging Face parler-tts
     if HF_TOKEN:
         print("[M2] Voiceover → HF parler-tts (parler_tts_mini_v0.1)...")
         out = out_dir / "voiceover_parler.wav"
-        if _parler_tts(script_text, out):
+        ok, hf_error = _parler_tts(script_text, out)
+        if ok:
             print("[M2] Voiceover ✓ parler-tts")
-            return str(out), "HF parler-tts (parler_tts_mini_v0.1)"
+            return str(out), "HF parler-tts (parler_tts_mini_v0.1)", None
         print("[M2] parler-tts failed — falling back to edge-tts")
 
     # Tier 2 — edge-tts AndrewNeural
