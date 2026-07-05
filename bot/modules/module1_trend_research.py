@@ -45,20 +45,18 @@ TRENDS_TIMEFRAME = os.getenv("TRENDS_TIMEFRAME", "now 7-d")
 
 def _init_groq() -> Groq:
     if not GROQ_API_KEY:
-        raise EnvironmentError("GROQ_API_KEY is not set. Add it as a Replit secret.")
+        raise EnvironmentError(
+            "GROQ_API_KEY is not set. Add it to your .env file or environment."
+        )
     return Groq(api_key=GROQ_API_KEY)
 
 
 def _fetch_pytrends(niche: str) -> list[dict]:
     """
-    Pull related queries from Google Trends via pytrends.
-    Returns list of {"query": str, "value": int, "source": "google_trends"}.
-    Raises on any failure so the caller can fall back gracefully.
+    Pytrends is disabled due to CPU compatibility issues.
+    Always raises ValueError to force LLM fallback.
     """
-    from pytrends.request import TrendReq  # lazy import — only used here
-
-    pt = TrendReq(hl="en-US", tz=360, timeout=(10, 25), retries=1, backoff_factor=0.5)
-    pt.build_payload([niche], timeframe=TRENDS_TIMEFRAME, geo=TRENDS_GEO)
+    raise ValueError("Pytrends disabled — using LLM brainstormer instead")
 
     related = pt.related_queries()
     trending_items = []
@@ -289,6 +287,10 @@ def build_script_prompt(
         - Tease one specific thing they will miss if they don't follow.
         - Feel personal. Feel urgent. Feel like a kept promise.
 
+        ── VISUAL CUES ──
+        Provide 2 timestamps (in seconds) where SFX should be placed for emphasis.
+        For example, at key moments in the script.
+
         ══ OUTPUT FORMAT ══
         Return ONLY a valid JSON object — no markdown fences, no extra text:
         {{
@@ -302,7 +304,8 @@ def build_script_prompt(
           "cta": "...",
           "keywords": ["...", "..."],
           "mood_tags": ["...", "..."],
-          "thumbnail_text": "..."
+          "thumbnail_text": "...",
+          "visual_cues": [10.0, 20.0]
         }}
     """).strip()
 
@@ -391,6 +394,7 @@ def _parse_json(raw: str) -> dict:
             "keywords": [],
             "mood_tags": [],
             "thumbnail_text": "",
+            "visual_cues": [10.0, 20.0],
             "raw_response": raw,
         }
 
