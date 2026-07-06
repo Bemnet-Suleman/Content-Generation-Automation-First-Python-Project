@@ -13,6 +13,17 @@ A Telegram bot for generating short-form content workflows from trend research t
 - `/assets` to gather supporting media for the last generated script
 - `/assemble` to build and send the finished video
 - Custom style and niche overrides per chat
+- `/channel` to switch between the three brand pipelines: G-Line, Factum, and 404 Circus
+
+## Three-channel workflow
+
+The backend is now aligned around three content brands so the Telegram workflow can cover most of the creator's production work:
+
+1. G-Line — financial content with a motivational, money-mindset angle.
+2. Factum — philosophy/facts/wisdom content with a reflective, high-signal tone.
+3. 404 Circus — tech/AI content with a clear, future-facing explanation style.
+
+When a channel is selected, the bot uses that brand context in Module 1 when drafting scripts, and it carries matching visual/audio defaults into Module 2 and Module 3. This gives the workflow a brand-aware backbone so the creator only needs to review and polish the final output instead of starting from scratch every time.
 
 ## Project structure
 

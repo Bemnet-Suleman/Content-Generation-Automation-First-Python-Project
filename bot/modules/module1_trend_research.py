@@ -28,6 +28,7 @@ import re
 import json
 import textwrap
 from datetime import datetime
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -192,6 +193,7 @@ def build_script_prompt(
     niche: str,
     trending_queries: list[dict],
     news_headlines: list[str],
+    channel_profile: dict | None = None,
 ) -> str:
     """
     Construct the LLM prompt from real trend data.
@@ -202,6 +204,10 @@ def build_script_prompt(
     cta_style = style_profile["script_cta_style"]
     music_genre = style_profile["music_genre"]
     visual_theme = style_profile["visual_theme"]
+    channel_name = channel_profile.get("display_name", "Default Brand") if channel_profile else "Default Brand"
+    channel_motto = channel_profile.get("motto", "") if channel_profile else ""
+    channel_tone = channel_profile.get("tone", tone) if channel_profile else tone
+    channel_angle = channel_profile.get("content_angle", "teach the audience something useful") if channel_profile else "teach the audience something useful"
 
     news_block = (
         "\n".join([f"  - {h}" for h in news_headlines])
@@ -215,6 +221,10 @@ def build_script_prompt(
         - Visual Theme : {visual_theme}
         - Music Genre  : {music_genre}
         - Script Tone  : {tone}
+        - Channel Brand: {channel_name}
+        - Channel Motto: {channel_motto}
+        - Channel Tone : {channel_tone}
+        - Brand Angle  : {channel_angle}
         - Hook Style   : {hook_style}
         - CTA Style    : {cta_style}
         - Caption Font : {style_profile["font"]} at {style_profile["caption_font_size"]}px
@@ -399,6 +409,107 @@ def _parse_json(raw: str) -> dict:
         }
 
 
+def generate_reference_videos(topic: str, groq_client: Groq | None = None, max_results: int = 5) -> list[dict]:
+    """Generate 5 reference-video candidates for the topic and return ready-to-send metadata."""
+    if groq_client is None:
+        groq_client = _init_groq()
+    prompt = textwrap.dedent(f"""
+        You are a content strategist for short-form video.
+        Give me {max_results} realistic reference video ideas for the topic: "{topic}".
+        Return ONLY valid JSON as an array of objects with these keys:
+        - title
+        - channel
+        - reason
+        - search_query
+    """).strip()
+    raw = _call_groq(groq_client, [{"role": "user", "content": prompt}])
+    try:
+        items = json.loads(raw)
+    except Exception:
+        items = []
+    references = []
+    for item in items[:max_results]:
+        query = item.get("search_query") or item.get("title") or topic
+        references.append({
+            "title": item.get("title") or "Reference video",
+            "channel": item.get("channel") or "Likely creator",
+            "reason": item.get("reason") or "Strong thematic overlap",
+            "search_query": query,
+            "url": f"https://www.youtube.com/results?search_query={quote(query)}",
+        })
+    return references
+
+
+def generate_hook_options(topic: str, script: dict, groq_client: Groq | None = None, count: int = 3) -> list[str]:
+    if groq_client is None:
+        groq_client = _init_groq()
+    prompt = textwrap.dedent(f"""
+        Write {count} short, scroll-stopping hook options for a short-form video about: "{topic}".
+        The hook should match this script theme: {script.get('hook','')}
+        Return ONLY valid JSON as an array of strings.
+    """).strip()
+    raw = _call_groq(groq_client, [{"role": "user", "content": prompt}])
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def generate_caption_variants(groq_client: Groq | None = None, count: int = 3) -> list[dict]:
+    if groq_client is None:
+        groq_client = _init_groq()
+    prompt = textwrap.dedent(f"""
+        Generate {count} caption style variants for a vertical short-form video.
+        Each variant should have a name and a short description.
+        Return ONLY valid JSON as an array of objects with keys: name, description.
+    """).strip()
+    raw = _call_groq(groq_client, [{"role": "user", "content": prompt}])
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def generate_thumbnail_options(topic: str, script: dict, groq_client: Groq | None = None, count: int = 5) -> list[str]:
+    if groq_client is None:
+        groq_client = _init_groq()
+    prompt = textwrap.dedent(f"""
+        Generate {count} strong thumbnail/title text options for a short-form video about: "{topic}".
+        The content should fit the script theme: {script.get('cta','')}
+        Return ONLY valid JSON as an array of strings.
+    """).strip()
+    raw = _call_groq(groq_client, [{"role": "user", "content": prompt}])
+    try:
+        return json.loads(raw)
+    except Exception:
+        return []
+
+
+def detect_trend_gap(topic: str, trending_queries: list[dict], groq_client: Groq | None = None) -> str:
+    if groq_client is None:
+        groq_client = _init_groq()
+    prompt = textwrap.dedent(f"""
+        Analyze this niche and the following trend queries to identify a clear content gap or angle opportunity.
+        Niche: "{topic}"
+        Trend queries: {json.dumps(trending_queries[:8], ensure_ascii=False)}
+        Return ONLY a short, useful sentence explaining the gap and the best angle to exploit.
+    """).strip()
+    raw = _call_groq(groq_client, [{"role": "user", "content": prompt}])
+    return raw.strip() or "This niche is still open for a sharper angle."
+
+
+def build_content_plan(topic: str, script: dict, trending_queries: list[dict], groq_client: Groq | None = None) -> dict:
+    if groq_client is None:
+        groq_client = _init_groq()
+    return {
+        "reference_videos": generate_reference_videos(topic, groq_client),
+        "hook_options": generate_hook_options(topic, script, groq_client),
+        "caption_variants": generate_caption_variants(groq_client),
+        "thumbnail_text_options": generate_thumbnail_options(topic, script, groq_client),
+        "trend_gap": detect_trend_gap(topic, trending_queries, groq_client),
+    }
+
+
 def generate_script(prompt: str, target_seconds: int = 60) -> dict:
     """
     Send the data-grounded prompt to Groq (Llama 3.3 70B).
@@ -492,6 +603,7 @@ def format_telegram_message(
     script: dict,
     trending: list[dict],
     trends_source: str = "📡 Live Google Trends",
+    channel_profile: dict | None = None,
 ) -> str:
     """
     Build the Telegram message in HTML parse mode.
@@ -502,6 +614,8 @@ def format_telegram_message(
     sep = "─" * 36
     label_color = style_profile["caption_color"]
     theme = style_profile["visual_theme"].upper().replace("_", " ")
+    channel_name = channel_profile.get("display_name", "Default Brand") if channel_profile else "Default Brand"
+    channel_motto = channel_profile.get("motto", "") if channel_profile else ""
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M UTC")
 
     top_trends = (
@@ -540,6 +654,8 @@ def format_telegram_message(
         f"<code>{sep}</code>\n"
         f"<b>Theme:</b> {theme}\n"
         f"<b>Niche:</b> {niche}\n"
+        f"<b>Channel:</b> {channel_name}\n"
+        f"<b>Motto:</b> {channel_motto}\n"
         f"<b>Generated:</b> {timestamp}\n\n"
         f"📊 <b>TOP TRENDING QUERIES</b> — <i>{trends_source}</i>\n{top_trends}\n\n"
         f"<code>{sep}</code>\n"
@@ -564,7 +680,7 @@ def format_telegram_message(
     return message
 
 
-def run_trend_research(niche: str | None = None) -> dict:
+def run_trend_research(niche: str | None = None, channel_profile: dict | None = None) -> dict:
     """
     Main entry point for Module 1.
 
@@ -600,10 +716,12 @@ def run_trend_research(niche: str | None = None) -> dict:
     headlines = fetch_google_news_snippets(top_query)
 
     print(f"[Module 1] Building prompt and calling Groq (Llama 3.3 70B)...")
-    prompt = build_script_prompt(niche, trending, headlines)
+    prompt = build_script_prompt(niche, trending, headlines, channel_profile)
     script = generate_script(prompt)
+    content_plan = build_content_plan(niche, script, trending, client)
+    script["content_plan"] = content_plan
 
-    tg_message = format_telegram_message(niche, script, trending, trends_source)
+    tg_message = format_telegram_message(niche, script, trending, trends_source, channel_profile)
 
     return {
         "niche": niche,
@@ -611,4 +729,6 @@ def run_trend_research(niche: str | None = None) -> dict:
         "script": script,
         "telegram_message": tg_message,
         "style_profile": style_profile,
+        "channel_profile": channel_profile or {},
+        "content_plan": content_plan,
     }

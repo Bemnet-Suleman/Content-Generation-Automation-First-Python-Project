@@ -16,14 +16,23 @@ import re
 from pathlib import Path
 from typing import List, Dict, Any
 
-from moviepy.editor import (
-    VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
-    TextClip, ColorClip, concatenate_videoclips
-)
-from moviepy.video.fx import speedx, resize
-from moviepy.audio.fx import volumex
-from pydub import AudioSegment
-import pysubs2
+try:
+    from moviepy.editor import (
+        VideoFileClip, AudioFileClip, CompositeVideoClip, CompositeAudioClip,
+        TextClip, ColorClip, concatenate_videoclips
+    )
+    from moviepy.video.fx import speedx, resize
+    from moviepy.audio.fx import volumex
+    from pydub import AudioSegment
+    import pysubs2
+    MOVIEPY_IMPORT_ERROR = None
+except Exception as exc:
+    VideoFileClip = AudioFileClip = CompositeVideoClip = CompositeAudioClip = TextClip = ColorClip = concatenate_videoclips = None
+    speedx = resize = None
+    volumex = None
+    AudioSegment = None
+    pysubs2 = None
+    MOVIEPY_IMPORT_ERROR = exc
 
 from bot.config import style_profile
 from bot.modules.module2_asset_sourcing import _build_script_text
@@ -68,6 +77,9 @@ def run_assembly(script_result: Dict[str, Any], assets: Dict[str, Any]) -> str:
 
     Returns: path to output .mp4
     """
+    if MOVIEPY_IMPORT_ERROR is not None:
+        raise RuntimeError(f"Assembly dependencies are missing: {MOVIEPY_IMPORT_ERROR}")
+
     out_dir = ASSETS_DIR / "assembly"
     out_dir.mkdir(exist_ok=True)
     output_path = str(out_dir / "final_video.mp4")
